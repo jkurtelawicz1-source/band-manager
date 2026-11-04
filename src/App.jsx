@@ -53,27 +53,31 @@ export default function App() {
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
 
-  // Fetch all data from Supabase
+  // Fetch all data from Supabase with error alerts
   async function loadData() {
     setSyncing(true)
     try {
       const { data: m, error: me } = await supabase.from('merch').select('*')
-      if (me) console.error('Merch fetch error:', me)
+      if (me) alert('Merch Load Error: ' + me.message)
       if (m) setMerch(m)
 
-      const { data: s } = await supabase.from('session_sales').select('*')
+      const { data: s, error: se } = await supabase.from('session_sales').select('*')
+      if (se) alert('Sales Load Error: ' + se.message)
       if (s) setSessionSales(s)
 
-      const { data: c } = await supabase.from('calendar_events').select('*')
+      const { data: c, error: ce } = await supabase.from('calendar_events').select('*')
+      if (ce) alert('Calendar Load Error: ' + ce.message)
       if (c) setCalendarEvents(c)
 
-      const { data: sl } = await supabase.from('setlists').select('*')
+      const { data: sl, error: sle } = await supabase.from('setlists').select('*')
+      if (sle) alert('Setlists Load Error: ' + sle.message)
       if (sl) setSetlists(sl)
 
-      const { data: t } = await supabase.from('treasury').select('*')
+      const { data: t, error: te } = await supabase.from('treasury').select('*')
+      if (te) alert('Treasury Load Error: ' + te.message)
       if (t) setTreasury(t)
     } catch (err) {
-      console.error('Supabase connection error:', err)
+      alert('Supabase Connection Catch: ' + err.message)
     }
     setSyncing(false)
   }
@@ -120,11 +124,15 @@ export default function App() {
       items: [...cart],
       total: cart.reduce((sum, i) => sum + (i.price * i.qty), 0)
     }
-    const updatedSales = [saleRecord, ...sessionSales]
-    setSessionSales(updatedSales)
-    setCart([])
+    
     const { error } = await supabase.from('session_sales').insert([saleRecord])
-    if (error) console.error('Checkout insert error:', error)
+    if (error) {
+      alert('Checkout Insert Failed: ' + error.message)
+      return
+    }
+
+    setSessionSales([saleRecord, ...sessionSales])
+    setCart([])
   }
 
   const sessionItemTotals = {}
@@ -142,10 +150,13 @@ export default function App() {
       const soldCount = sessionItemTotals[m.id] || 0
       return { ...m, stock_count: Math.max(0, m.stock_count - soldCount) }
     })
-    setMerch(updatedMerch)
 
     for (const m of updatedMerch) {
-      await supabase.from('merch').update({ stock_count: m.stock_count }).eq('id', m.id)
+      const { error } = await supabase.from('merch').update({ stock_count: m.stock_count }).eq('id', m.id)
+      if (error) {
+        alert('Stock Reconciliation Update Failed: ' + error.message)
+        return
+      }
     }
 
     const aggregatedTx = {
@@ -155,12 +166,22 @@ export default function App() {
       type: 'digital',
       amount: sessionTotalRevenue
     }
-    const updatedTreasury = [aggregatedTx, ...treasury]
-    setTreasury(updatedTreasury)
-    await supabase.from('treasury').insert([aggregatedTx])
 
+    const { error: txError } = await supabase.from('treasury').insert([aggregatedTx])
+    if (txError) {
+      alert('Treasury Settlement Insert Failed: ' + txError.message)
+      return
+    }
+
+    const { error: delError } = await supabase.from('session_sales').delete().neq('id', '0')
+    if (delError) {
+      alert('Session Sales Clear Failed: ' + delError.message)
+      return
+    }
+
+    setMerch(updatedMerch)
+    setTreasury([aggregatedTx, ...treasury])
     setSessionSales([])
-    await supabase.from('session_sales').delete().neq('id', '0')
   }
 
   // Inventory Handlers
@@ -180,29 +201,37 @@ export default function App() {
       has_sizes: hasMultipleSizes 
     }
 
-    setMerch([newItem, ...merch])
     const { error } = await supabase.from('merch').insert([newItem])
-    if (error) console.error('Add merch error:', error)
+    if (error) {
+      alert('Merch Insert Failed: ' + error.message)
+      return
+    }
 
+    setMerch([newItem, ...merch])
     setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
   }
 
   async function updateStock(id, delta) {
-    const updated = merch.map(m => {
-      if (m.id === id) {
-        const newStock = Math.max(0, m.stock_count + delta)
-        return { ...m, stock_count: newStock }
-      }
-      return m
-    })
-    setMerch(updated)
-    const target = updated.find(m => m.id === id)
-    await supabase.from('merch').update({ stock_count: target.stock_count }).eq('id', id)
+    const target = merch.find(m => m.id === id)
+    if (!target) return
+    const newStock = Math.max(0, target.stock_count + delta)
+
+    const { error } = await supabase.from('merch').update({ stock_count: newStock }).eq('id', id)
+    if (error) {
+      alert('Stock Update Failed: ' + error.message)
+      return
+    }
+
+    setMerch(merch.map(m => m.id === id ? { ...m, stock_count: newStock } : m))
   }
 
   async function deleteMerch(id) {
+    const { error } = await supabase.from('merch').delete().eq('id', id)
+    if (error) {
+      alert('Merch Delete Failed: ' + error.message)
+      return
+    }
     setMerch(merch.filter(m => m.id !== id))
-    await supabase.from('merch').delete().eq('id', id)
   }
 
   // Calendar Handlers
@@ -211,18 +240,22 @@ export default function App() {
     if (!eventTitle || !eventDate) return
 
     if (editingEventId) {
-      const updatedList = calendarEvents.map(ev => ev.id === editingEventId ? {
-        ...ev,
+      const updatedEvent = {
         type: eventType,
         title: eventTitle,
         location: eventLocation || 'TBD',
         date: eventDate,
         guarantee: parseFloat(eventGuarantee) || 0,
         notes: eventNotes || ''
-      } : ev)
-      setCalendarEvents(updatedList)
-      const target = updatedList.find(ev => ev.id === editingEventId)
-      await supabase.from('calendar_events').update(target).eq('id', editingEventId)
+      }
+
+      const { error } = await supabase.from('calendar_events').update(updatedEvent).eq('id', editingEventId)
+      if (error) {
+        alert('Event Update Failed: ' + error.message)
+        return
+      }
+
+      setCalendarEvents(calendarEvents.map(ev => ev.id === editingEventId ? { ...ev, ...updatedEvent } : ev))
       setEditingEventId(null)
     } else {
       const newEv = {
@@ -236,35 +269,55 @@ export default function App() {
         promoter_confirmed: false,
         notes: eventNotes || ''
       }
+
+      const { error } = await supabase.from('calendar_events').insert([newEv])
+      if (error) {
+        alert('Event Insert Failed: ' + error.message)
+        return
+      }
+
       setCalendarEvents([newEv, ...calendarEvents])
-      await supabase.from('calendar_events').insert([newEv])
     }
 
     setEventTitle(''); setEventLocation(''); setEventDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(false)
   }
 
   async function handleVote(eventId, memberName) {
-    const updated = calendarEvents.map(ev => {
-      if (ev.id !== eventId) return ev
-      const hasVoted = ev.votes.includes(memberName)
-      const newVotes = hasVoted ? ev.votes.filter(v => v !== memberName) : [...ev.votes, memberName]
-      return { ...ev, votes: newVotes }
-    })
-    setCalendarEvents(updated)
-    const target = updated.find(ev => ev.id === eventId)
-    await supabase.from('calendar_events').update({ votes: target.votes }).eq('id', eventId)
+    const target = calendarEvents.find(ev => ev.id === eventId)
+    if (!target) return
+    const hasVoted = target.votes.includes(memberName)
+    const newVotes = hasVoted ? target.votes.filter(v => v !== memberName) : [...target.votes, memberName]
+
+    const { error } = await supabase.from('calendar_events').update({ votes: newVotes }).eq('id', eventId)
+    if (error) {
+      alert('Vote Update Failed: ' + error.message)
+      return
+    }
+
+    setCalendarEvents(calendarEvents.map(ev => ev.id === eventId ? { ...ev, votes: newVotes } : ev))
   }
 
   async function togglePromoterConfirm(eventId) {
-    const updated = calendarEvents.map(ev => ev.id === eventId ? { ...ev, promoter_confirmed: !ev.promoter_confirmed } : ev)
-    setCalendarEvents(updated)
-    const target = updated.find(ev => ev.id === eventId)
-    await supabase.from('calendar_events').update({ promoter_confirmed: target.promoter_confirmed }).eq('id', eventId)
+    const target = calendarEvents.find(ev => ev.id === eventId)
+    if (!target) return
+    const newStatus = !target.promoter_confirmed
+
+    const { error } = await supabase.from('calendar_events').update({ promoter_confirmed: newStatus }).eq('id', eventId)
+    if (error) {
+      alert('Promoter Confirm Update Failed: ' + error.message)
+      return
+    }
+
+    setCalendarEvents(calendarEvents.map(ev => ev.id === eventId ? { ...ev, promoter_confirmed: newStatus } : ev))
   }
 
   async function deleteEvent(id) {
+    const { error } = await supabase.from('calendar_events').delete().eq('id', id)
+    if (error) {
+      alert('Event Delete Failed: ' + error.message)
+      return
+    }
     setCalendarEvents(calendarEvents.filter(ev => ev.id !== id))
-    await supabase.from('calendar_events').delete().eq('id', id)
   }
 
   // Setlist Handlers
@@ -284,14 +337,24 @@ export default function App() {
       show_date: showDateVal || 'Upcoming',
       songs: currentSongs.length > 0 ? currentSongs : ['Default Jam']
     }
+
+    const { error } = await supabase.from('setlists').insert([newSet])
+    if (error) {
+      alert('Setlist Insert Failed: ' + error.message)
+      return
+    }
+
     setSetlists([newSet, ...setlists])
-    await supabase.from('setlists').insert([newSet])
     setSetTitle(''); setSetVenue(''); setShowDateVal(''); setCurrentSongs([]); setShowAddSetlist(false)
   }
 
   async function deleteSetlist(id) {
+    const { error } = await supabase.from('setlists').delete().eq('id', id)
+    if (error) {
+      alert('Setlist Delete Failed: ' + error.message)
+      return
+    }
     setSetlists(setlists.filter(s => s.id !== id))
-    await supabase.from('setlists').delete().eq('id', id)
   }
 
   // Treasury Handlers
@@ -307,14 +370,24 @@ export default function App() {
       type: txWallet,
       amount: finalAmount
     }
+
+    const { error } = await supabase.from('treasury').insert([newTx])
+    if (error) {
+      alert('Transaction Insert Failed: ' + error.message)
+      return
+    }
+
     setTreasury([newTx, ...treasury])
-    await supabase.from('treasury').insert([newTx])
     setTxDesc(''); setTxAmount(''); setShowTxModal(false)
   }
 
   async function deleteTransaction(id) {
+    const { error } = await supabase.from('treasury').delete().eq('id', id)
+    if (error) {
+      alert('Transaction Delete Failed: ' + error.message)
+      return
+    }
     setTreasury(treasury.filter(t => t.id !== id))
-    await supabase.from('treasury').delete().eq('id', id)
   }
 
   const cashBalance = treasury.filter(t => t.type === 'cash').reduce((sum, t) => sum + Number(t.amount), 0)
