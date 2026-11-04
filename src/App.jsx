@@ -16,6 +16,10 @@ export default function App() {
   const [selectedSizes, setSelectedSizes] = useState({})
   const [cart, setCart] = useState([])
 
+  // Reconciliation Modal States
+  const [showReconcileModal, setShowReconcileModal] = useState(false)
+  const [doorIncomeInput, setDoorIncomeInput] = useState('')
+
   // Calendar Modal States
   const [showAddEvent, setShowAddEvent] = useState(false)
   const [editingEventId, setEditingEventId] = useState(null)
@@ -42,8 +46,9 @@ export default function App() {
   const [txCategory, setTxCategory] = useState('Merch')
   const [txAmount, setTxAmount] = useState('')
 
-  // Inventory Add Modal & Size Matrix States
+  // Inventory Add/Edit Modal & Size Matrix States
   const [showAddMerch, setShowAddMerch] = useState(false)
+  const [editingMerchId, setEditingMerchId] = useState(null)
   const [newName, setNewName] = useState('')
   const [newPrice, setNewPrice] = useState('')
   const [hasMultipleSizes, setHasMultipleSizes] = useState(false)
@@ -53,31 +58,26 @@ export default function App() {
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
 
-  // Fetch all data from Supabase with error alerts
+  // Fetch all data from Supabase
   async function loadData() {
     setSyncing(true)
     try {
-      const { data: m, error: me } = await supabase.from('merch').select('*')
-      if (me) alert('Merch Load Error: ' + me.message)
+      const { data: m } = await supabase.from('merch').select('*')
       if (m) setMerch(m)
 
-      const { data: s, error: se } = await supabase.from('session_sales').select('*')
-      if (se) alert('Sales Load Error: ' + se.message)
+      const { data: s } = await supabase.from('session_sales').select('*')
       if (s) setSessionSales(s)
 
-      const { data: c, error: ce } = await supabase.from('calendar_events').select('*')
-      if (ce) alert('Calendar Load Error: ' + ce.message)
+      const { data: c } = await supabase.from('calendar_events').select('*')
       if (c) setCalendarEvents(c)
 
-      const { data: sl, error: sle } = await supabase.from('setlists').select('*')
-      if (sle) alert('Setlists Load Error: ' + sle.message)
+      const { data: sl } = await supabase.from('setlists').select('*')
       if (sl) setSetlists(sl)
 
-      const { data: t, error: te } = await supabase.from('treasury').select('*')
-      if (te) alert('Treasury Load Error: ' + te.message)
+      const { data: t } = await supabase.from('treasury').select('*')
       if (t) setTreasury(t)
     } catch (err) {
-      alert('Supabase Connection Catch: ' + err.message)
+      console.error('Supabase Connection Catch:', err)
     }
     setSyncing(false)
   }
@@ -115,6 +115,10 @@ export default function App() {
     }
   }
 
+  function handleRemoveCartItem(cartKey) {
+    setCart(cart.filter(c => c.cartKey !== cartKey))
+  }
+
   async function handleCheckout(paymentType) {
     if (cart.length === 0) return
     const saleRecord = {
@@ -141,11 +145,18 @@ export default function App() {
       sessionItemTotals[i.id] = (sessionItemTotals[i.id] || 0) + i.qty
     })
   })
-  const sessionTotalRevenue = sessionSales.reduce((sum, s) => sum + s.total, 0)
+  const sessionTotalMerchRevenue = sessionSales.reduce((sum, s) => sum + s.total, 0)
 
-  async function handleCompleteReconciliation() {
-    if (sessionSales.length === 0) return
-    
+  // Payment method breakdowns for the Reconciliation modal
+  const paymentBreakdowns = sessionSales.reduce((acc, sale) => {
+    acc[sale.payment_type] = (acc[sale.payment_type] || 0) + sale.total
+    return acc
+  }, {})
+
+  const doorIncomeVal = parseFloat(doorIncomeInput) || 0
+  const grandTotalDay = sessionTotalMerchRevenue + doorIncomeVal
+
+  async function handleConfirmReconciliation() {
     const updatedMerch = merch.map(m => {
       const soldCount = sessionItemTotals[m.id] || 0
       return { ...m, stock_count: Math.max(0, m.stock_count - soldCount) }
@@ -159,55 +170,84 @@ export default function App() {
       }
     }
 
-    const aggregatedTx = {
-      id: Date.now().toString(),
-      description: `Merch Booth Settlement (${sessionSales.length} orders)`,
-      category: 'Merch',
-      type: 'digital',
-      amount: sessionTotalRevenue
+    // Push individual settlement entries or combined grand totals
+    if (sessionTotalMerchRevenue > 0) {
+      const merchTx = {
+        id: Date.now().toString(),
+        description: `Merch Booth Settlement (${sessionSales.length} orders)`,
+        category: 'Merch',
+        type: 'digital',
+        amount: sessionTotalMerchRevenue
+      }
+      await supabase.from('treasury').insert([merchTx])
+      setTreasury(prev => [merchTx, ...prev])
     }
 
-    const { error: txError } = await supabase.from('treasury').insert([aggregatedTx])
-    if (txError) {
-      alert('Treasury Settlement Insert Failed: ' + txError.message)
-      return
+    if (doorIncomeVal > 0) {
+      const doorTx = {
+        id: (Date.now() + 1).toString(),
+        description: `Show Door / Guarantee Cut`,
+        category: 'Show Payout',
+        type: 'cash',
+        amount: doorIncomeVal
+      }
+      await supabase.from('treasury').insert([doorTx])
+      setTreasury(prev => [doorTx, ...prev])
     }
 
-    const { error: delError } = await supabase.from('session_sales').delete().neq('id', '0')
-    if (delError) {
-      alert('Session Sales Clear Failed: ' + delError.message)
-      return
-    }
+    // Clear session sales
+    await supabase.from('session_sales').delete().neq('id', '0')
 
     setMerch(updatedMerch)
-    setTreasury([aggregatedTx, ...treasury])
     setSessionSales([])
+    setShowReconcileModal(false)
+    setDoorIncomeInput('')
   }
 
   // Inventory Handlers
-  async function handleAddMerchItem(e) {
+  async function handleSaveMerchItem(e) {
     e.preventDefault()
     if (!newName || !newPrice) return
     const totalCalculatedStock = hasMultipleSizes 
       ? Object.values(sizeStockMatrix).reduce((a, b) => a + Number(b), 0)
       : (parseInt(singleStock) || 0)
 
-    const newItem = { 
-      id: Date.now().toString(), 
-      item_name: newName, 
-      size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
-      price: parseFloat(newPrice) || 0, 
-      stock_count: totalCalculatedStock,
-      has_sizes: hasMultipleSizes 
+    if (editingMerchId) {
+      const updatedItem = {
+        item_name: newName,
+        size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'),
+        price: parseFloat(newPrice) || 0,
+        stock_count: totalCalculatedStock,
+        has_sizes: hasMultipleSizes
+      }
+
+      const { error } = await supabase.from('merch').update(updatedItem).eq('id', editingMerchId)
+      if (error) {
+        alert('Merch Update Failed: ' + error.message)
+        return
+      }
+
+      setMerch(merch.map(m => m.id === editingMerchId ? { ...m, ...updatedItem } : m))
+      setEditingMerchId(null)
+    } else {
+      const newItem = { 
+        id: Date.now().toString(), 
+        item_name: newName, 
+        size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
+        price: parseFloat(newPrice) || 0, 
+        stock_count: totalCalculatedStock,
+        has_sizes: hasMultipleSizes 
+      }
+
+      const { error } = await supabase.from('merch').insert([newItem])
+      if (error) {
+        alert('Merch Insert Failed: ' + error.message)
+        return
+      }
+
+      setMerch([newItem, ...merch])
     }
 
-    const { error } = await supabase.from('merch').insert([newItem])
-    if (error) {
-      alert('Merch Insert Failed: ' + error.message)
-      return
-    }
-
-    setMerch([newItem, ...merch])
     setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
   }
 
@@ -419,14 +459,64 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Live Booth POS</h2>
-                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Session Total: ${sessionTotalRevenue.toFixed(2)} ({sessionSales.length} sales)</p>
+                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Merch Sales Total: ${sessionTotalMerchRevenue.toFixed(2)} ({sessionSales.length} orders)</p>
               </div>
               {sessionSales.length > 0 && (
-                <button onClick={handleCompleteReconciliation} style={{ background: '#16A34A', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>
+                <button onClick={() => setShowReconcileModal(true)} style={{ background: '#16A34A', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>
                   Reconcile Night
                 </button>
               )}
             </div>
+
+            {/* Reconciliation Totals Modal */}
+            {showReconcileModal && (
+              <div style={{ background: '#18181B', border: '2px solid #22C55E', borderRadius: '8px', padding: '14px', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#22C55E' }}>Nightly Reconciliation Summary</h3>
+                
+                <div style={{ fontSize: '13px', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px', background: '#0F0F10', padding: '10px', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#A1A1AA' }}>Total Transactions:</span>
+                    <span style={{ fontWeight: 'bold' }}>{sessionSales.length} orders</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#A1A1AA' }}>Merch Revenue:</span>
+                    <span style={{ fontWeight: 'bold', color: '#22C55E' }}>${sessionTotalMerchRevenue.toFixed(2)}</span>
+                  </div>
+                  {Object.entries(paymentBreakdowns).map(([method, total]) => (
+                    <div key={method} style={{ display: 'flex', justifyContent: 'space-between', paddingLeft: '10px', fontSize: '12px' }}>
+                      <span style={{ color: '#71717A' }}>• {method} Payments:</span>
+                      <span style={{ color: '#D4D4D8' }}>${total.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginBottom: '12px' }}>
+                  <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>Door / Show Guarantee Payout ($):</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    placeholder="e.g. 350.00" 
+                    value={doorIncomeInput} 
+                    onChange={e => setDoorIncomeInput(e.target.value)} 
+                    style={inputStyle} 
+                  />
+                </div>
+
+                <div style={{ background: '#121214', padding: '10px', borderRadius: '6px', marginBottom: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '14px', fontWeight: 'bold' }}>Grand Total (Merch + Door):</span>
+                  <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#22C55E' }}>${grandTotalDay.toFixed(2)}</span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={handleConfirmReconciliation} style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
+                    Confirm & Transfer to Treasury
+                  </button>
+                  <button onClick={() => setShowReconcileModal(false)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '20px' }}>
               {merch.map(item => {
@@ -513,13 +603,15 @@ export default function App() {
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Merch Inventory</h2>
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Cloud synced inventory counts</p>
               </div>
-              <button onClick={() => setShowAddMerch(!showAddMerch)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+              <button onClick={() => { setEditingMerchId(null); setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(!showAddMerch) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                 {showAddMerch ? 'Cancel' : '+ Add Item'}
               </button>
             </div>
 
             {showAddMerch && (
-              <form onSubmit={handleAddMerchItem} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
+              <form onSubmit={handleSaveMerchItem} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
+                <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 8px 0', color: '#3B82F6' }}>{editingMerchId ? 'Edit Merch Item' : 'Add New Merch Item'}</h3>
+                
                 <input type="text" placeholder="Item Name (e.g. Tour Hoodie)" value={newName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
                 
                 <input type="number" step="0.01" placeholder="Price $" value={newPrice} onChange={e => setNewPrice(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
@@ -536,7 +628,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '4px', marginBottom: '10px', border: '1px solid #27272A' }}>
-                    <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 6px 0' }}>Initial Stock per Size:</p>
+                    <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 6px 0' }}>Stock per Size:</p>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
                       {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(sz => (
                         <div key={sz}>
@@ -553,7 +645,9 @@ export default function App() {
                   </div>
                 )}
 
-                <button type="submit" style={{ width: '100%', background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>Save Item</button>
+                <button type="submit" style={{ width: '100%', background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
+                  {editingMerchId ? 'Update Item' : 'Save Item'}
+                </button>
               </form>
             )}
 
@@ -575,7 +669,21 @@ export default function App() {
                     <button onClick={() => updateStock(item.id, -1)} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Minus size={12} /></button>
                     <span style={{ fontWeight: 'bold', fontSize: '13px', minWidth: '20px', textAlign: 'center' }}>{stock}</span>
                     <button onClick={() => updateStock(item.id, 1)} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Plus size={12} /></button>
-                    <button onClick={() => deleteMerch(item.id)} style={{ background: 'none', border: 'none', color: '#EF4444', marginLeft: '6px', cursor: 'pointer' }}><Trash2 size={14} /></button>
+                    
+                    <button onClick={() => {
+                      setEditingMerchId(item.id)
+                      setNewName(item.item_name)
+                      setNewPrice(item.price)
+                      setHasMultipleSizes(item.has_sizes || false)
+                      if (!item.has_sizes) setSingleStock(item.stock_count)
+                      setShowAddMerch(true)
+                    }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0, marginLeft: '4px' }} title="Edit Item">
+                      <Edit2 size={15} />
+                    </button>
+
+                    <button onClick={() => deleteMerch(item.id)} style={{ background: 'none', border: 'none', color: '#EF4444', marginLeft: '4px', cursor: 'pointer' }} title="Delete Item">
+                      <Trash2 size={15} />
+                    </button>
                   </div>
                 </div>
               )
@@ -801,20 +909,36 @@ export default function App() {
         )}
       </main>
 
-      {/* Sticky Checkout Drawer */}
+      {/* Sticky Checkout Drawer with Individual Cart Item Removal */}
       {activeTab === 'sales' && cart.length > 0 && (
         <div style={{ position: 'fixed', bottom: '65px', left: 0, right: 0, maxWidth: '480px', margin: '0 auto', background: '#18181B', borderTop: '2px solid #2563EB', padding: '12px 16px', boxSizing: 'border-box', boxShadow: '0 -4px 12px rgba(0,0,0,0.5)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <div>
-              <span style={{ fontSize: '12px', color: '#A1A1AA' }}>Cart: </span>
-              <span style={{ fontSize: '22px', fontWeight: 'bold', color: '#22C55E' }}>${cart.reduce((s, i) => s + (i.price * i.qty), 0).toFixed(2)}</span>
+              <span style={{ fontSize: '12px', color: '#A1A1AA' }}>Cart Total: </span>
+              <span style={{ fontSize: '20px', fontWeight: 'bold', color: '#22C55E' }}>${cart.reduce((s, i) => s + (i.price * i.qty), 0).toFixed(2)}</span>
             </div>
-            <button onClick={() => setCart([])} style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: '12px', cursor: 'pointer' }}>Clear</button>
+            <button onClick={() => setCart([])} style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: '11px', cursor: 'pointer', fontWeight: 'bold' }}>Clear All</button>
           </div>
+
+          {/* Individual Cart Items List */}
+          <div style={{ maxHeight: '100px', overflowY: 'auto', marginBottom: '10px', background: '#0F0F10', padding: '6px', borderRadius: '4px', border: '1px solid #27272A' }}>
+            {cart.map(cItem => (
+              <div key={cItem.cartKey} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', padding: '3px 0', borderBottom: '1px solid #18181B' }}>
+                <span style={{ color: '#D4D4D8' }}>{cItem.qty}x {cItem.item_name} ({cItem.size})</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: '#22C55E', fontWeight: 'bold' }}>${(cItem.price * cItem.qty).toFixed(2)}</span>
+                  <button onClick={() => handleRemoveCartItem(cItem.cartKey)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Remove Item">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={() => handleCheckout('Cash')} style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}>💵 CASH</button>
-            <button onClick={() => handleCheckout('Card')} style={{ flex: 1, background: '#2563EB', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}>💳 CARD</button>
-            <button onClick={() => handleCheckout('Digital')} style={{ flex: 1, background: '#9333EA', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}>📱 DIGITAL</button>
+            <button onClick={() => handleCheckout('Cash')} style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>💵 CASH</button>
+            <button onClick={() => handleCheckout('Card')} style={{ flex: 1, background: '#2563EB', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>💳 CARD</button>
+            <button onClick={() => handleCheckout('Digital')} style={{ flex: 1, background: '#9333EA', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>📱 DIGITAL</button>
           </div>
         </div>
       )}
