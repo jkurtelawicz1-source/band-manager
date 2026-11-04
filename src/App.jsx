@@ -6,26 +6,27 @@ export default function App() {
   
   // Merch Inventory
   const [merch, setMerch] = useState(() => {
-    const saved = localStorage.getItem('band_merch_v7')
+    const saved = localStorage.getItem('band_merch_v8')
     return saved ? JSON.parse(saved) : [
-      { id: '1', item_name: 'Tour T-Shirt', size: 'L', price: 25, stock_count: 24 },
-      { id: '2', item_name: 'Tour T-Shirt', size: 'XL', price: 25, stock_count: 12 },
-      { id: '3', item_name: 'Enamel Logo Pin', size: 'One Size', price: 8, stock_count: 3 },
-      { id: '4', item_name: 'Woven Patch', size: 'Standard', price: 6, stock_count: 10 }
+      { id: '1', item_name: 'Tour T-Shirt', size: 'L', price: 25, stock_count: 24, hasSizes: true },
+      { id: '2', item_name: 'Tour T-Shirt', size: 'XL', price: 25, stock_count: 4, hasSizes: true },
+      { id: '3', item_name: 'Enamel Logo Pin', size: 'One Size', price: 8, stock_count: 3, hasSizes: false },
+      { id: '4', item_name: 'Woven Patch', size: 'Standard', price: 6, stock_count: 12, hasSizes: false }
     ]
   })
 
   // Live POS Cart & Session Sales
   const [cart, setCart] = useState([])
   const [flashCardId, setFlashCardId] = useState(null)
+  const [selectedSizes, setSelectedSizes] = useState({}) // Tracks POS dropdown size per item ID
   const [sessionSales, setSessionSales] = useState(() => {
-    const saved = localStorage.getItem('band_session_sales_v7')
+    const saved = localStorage.getItem('band_session_sales_v8')
     return saved ? JSON.parse(saved) : []
   })
 
-  // Calendar / Tour Events (Shows, Practices, Blackouts)
+  // Calendar / Tour Events
   const [calendarEvents, setCalendarEvents] = useState(() => {
-    const saved = localStorage.getItem('band_calendar_v7')
+    const saved = localStorage.getItem('band_calendar_v8')
     return saved ? JSON.parse(saved) : [
       { id: '1', type: 'Show', title: 'The Rusty Anchor', location: 'Wilmington, NC', date: '2026-09-04', guarantee: 350, votes: ['Member1', 'Member2', 'Member3'], promoterConfirmed: true, notes: 'Load-in at 5 PM. Soundcheck at 6 PM.' },
       { id: '2', type: 'Practice', title: 'Garage Rehearsal', location: 'Boiling Springs, SC', date: '2026-09-06', guarantee: 0, votes: [], promoterConfirmed: false, notes: 'Working on new breakdown transitions.' }
@@ -42,7 +43,7 @@ export default function App() {
 
   // Setlists
   const [setlists, setSetlists] = useState(() => {
-    const saved = localStorage.getItem('band_setlists_v7')
+    const saved = localStorage.getItem('band_setlists_v8')
     return saved ? JSON.parse(saved) : [
       { id: '1', title: 'Live at The Underground', venue: 'Spartanburg Stage', show_date: '2026-09-04', songs: ['Intro / Feedback', 'Riff Heavyweight', 'Asymmetric Breakdown'] }
     ]
@@ -54,9 +55,9 @@ export default function App() {
   const [songInput, setSongInput] = useState('')
   const [currentSongs, setCurrentSongs] = useState([])
 
-  // Treasury (Starts clean at $0.00)
+  // Treasury
   const [treasury, setTreasury] = useState(() => {
-    const saved = localStorage.getItem('band_treasury_v7')
+    const saved = localStorage.getItem('band_treasury_v8')
     return saved ? JSON.parse(saved) : []
   })
   const [showTxModal, setShowTxModal] = useState(false)
@@ -66,19 +67,23 @@ export default function App() {
   const [txCategory, setTxCategory] = useState('Merch')
   const [txAmount, setTxAmount] = useState('')
 
-  // Inventory Add/Edit Modal
+  // Inventory Add Modal & Size Matrix States
   const [showAddMerch, setShowAddMerch] = useState(false)
   const [newName, setNewName] = useState('')
-  const [newSize, setNewSize] = useState('')
   const [newPrice, setNewPrice] = useState('')
-  const [newStock, setNewStock] = useState('')
+  const [hasMultipleSizes, setHasMultipleSizes] = useState(false)
+  const [singleSizeName, setSingleSizeName] = useState('Standard')
+  const [singleStock, setSingleStock] = useState('')
+  const [sizeStockMatrix, setSizeStockMatrix] = useState({
+    'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
+  })
 
   // Persistence
-  useEffect(() => { localStorage.setItem('band_merch_v7', JSON.stringify(merch)) }, [merch])
-  useEffect(() => { localStorage.setItem('band_session_sales_v7', JSON.stringify(sessionSales)) }, [sessionSales])
-  useEffect(() => { localStorage.setItem('band_calendar_v7', JSON.stringify(calendarEvents)) }, [calendarEvents])
-  useEffect(() => { localStorage.setItem('band_setlists_v7', JSON.stringify(setlists)) }, [setlists])
-  useEffect(() => { localStorage.setItem('band_treasury_v7', JSON.stringify(treasury)) }, [treasury])
+  useEffect(() => { localStorage.setItem('band_merch_v8', JSON.stringify(merch)) }, [merch])
+  useEffect(() => { localStorage.setItem('band_session_sales_v8', JSON.stringify(sessionSales)) }, [sessionSales])
+  useEffect(() => { localStorage.setItem('band_calendar_v8', JSON.stringify(calendarEvents)) }, [calendarEvents])
+  useEffect(() => { localStorage.setItem('band_setlists_v8', JSON.stringify(setlists)) }, [setlists])
+  useEffect(() => { localStorage.setItem('band_treasury_v8', JSON.stringify(treasury)) }, [treasury])
 
   const inputStyle = {
     width: '100%',
@@ -93,15 +98,19 @@ export default function App() {
   // POS Sales Handlers
   function handleAddToCart(item) {
     if (item.stock_count <= 0) return
+    const chosenSize = item.hasSizes ? (selectedSizes[item.id] || 'L') : item.size
+    
     setFlashCardId(item.id)
     setTimeout(() => setFlashCardId(null), 250)
-    const existing = cart.find(c => c.id === item.id)
+
+    const cartKey = `${item.id}-${chosenSize}`
+    const existing = cart.find(c => c.cartKey === cartKey)
     if (existing) {
       if (existing.qty < item.stock_count) {
-        setCart(cart.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c))
+        setCart(cart.map(c => c.cartKey === cartKey ? { ...c, qty: c.qty + 1 } : c))
       }
     } else {
-      setCart([...cart, { ...item, qty: 1 }])
+      setCart([...cart, { ...item, size: chosenSize, cartKey, qty: 1 }])
     }
   }
 
@@ -285,15 +294,16 @@ export default function App() {
                 return (
                   <div 
                     key={item.id}
-                    onClick={() => handleAddToCart(item)}
                     style={{
                       background: isSoldOut ? '#121214' : '#18181B',
                       border: isFlashing ? '2px solid #22C55E' : '1px solid #27272A',
                       borderRadius: '8px',
                       padding: '12px',
-                      cursor: isSoldOut ? 'not-allowed' : 'pointer',
                       opacity: isSoldOut ? 0.5 : 1,
-                      position: 'relative'
+                      position: 'relative',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between'
                     }}
                   >
                     {soldQty > 0 && (
@@ -301,11 +311,35 @@ export default function App() {
                         Sold: {soldQty}
                       </div>
                     )}
-                    <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{item.item_name}</h3>
-                    <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 8px 0' }}>{item.size}</p>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#22C55E' }}>${item.price}</span>
-                      <span style={{ fontSize: '10px', color: '#71717A' }}>Stock: {item.stock_count}</span>
+                    <div>
+                      <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{item.item_name}</h3>
+                      <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 8px 0' }}>{item.hasSizes ? 'Sizes: S - 3XL' : item.size}</p>
+                    </div>
+
+                    <div>
+                      {item.hasSizes && (
+                        <select 
+                          value={selectedSizes[item.id] || 'L'} 
+                          onChange={(e) => setSelectedSizes({...selectedSizes, [item.id]: e.target.value})}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ width: '100%', padding: '4px', background: '#0F0F10', border: '1px solid #27272A', borderRadius: '4px', color: '#fff', fontSize: '11px', marginBottom: '8px' }}
+                        >
+                          {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(sz => <option key={sz} value={sz}>Size: {sz}</option>)}
+                        </select>
+                      )}
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#22C55E' }}>${item.price}</span>
+                        <span style={{ fontSize: '10px', color: '#71717A' }}>Stock: {item.stock_count}</span>
+                      </div>
+
+                      <button 
+                        disabled={isSoldOut}
+                        onClick={() => handleAddToCart(item)}
+                        style={{ width: '100%', background: isSoldOut ? '#27272A' : '#2563EB', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', cursor: isSoldOut ? 'not-allowed' : 'pointer' }}
+                      >
+                        + Add to Cart
+                      </button>
                     </div>
                   </div>
                 )
@@ -335,7 +369,7 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Merch Inventory</h2>
-                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Manage stock levels & pricing</p>
+                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Color-coded stock alerts & pricing</p>
               </div>
               <button onClick={() => setShowAddMerch(!showAddMerch)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                 {showAddMerch ? 'Cancel' : '+ Add Item'}
@@ -346,33 +380,84 @@ export default function App() {
               <form onSubmit={(e) => {
                 e.preventDefault()
                 if (!newName || !newPrice) return
-                setMerch([{ id: Date.now().toString(), item_name: newName, size: newSize || 'Standard', price: parseFloat(newPrice) || 0, stock_count: parseInt(newStock) || 0 }, ...merch])
-                setNewName(''); setNewSize(''); setNewPrice(''); setNewStock(''); setShowAddMerch(false)
+                const totalCalculatedStock = hasMultipleSizes 
+                  ? Object.values(sizeStockMatrix).reduce((a, b) => a + Number(b), 0)
+                  : (parseInt(singleStock) || 0)
+
+                setMerch([{ 
+                  id: Date.now().toString(), 
+                  item_name: newName, 
+                  size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
+                  price: parseFloat(newPrice) || 0, 
+                  stock_count: totalCalculatedStock,
+                  hasSizes: hasMultipleSizes 
+                }, ...merch])
+
+                setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
               }} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
-                <input type="text" placeholder="Item Name" value={newName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
+                <input type="text" placeholder="Item Name (e.g. Tour Hoodie)" value={newName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
+                
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                  <input type="text" placeholder="Size (L)" value={newSize} onChange={e => setNewSize(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
-                  <input type="number" placeholder="Price $" value={newPrice} onChange={e => setNewPrice(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
-                  <input type="number" placeholder="Stock" value={newStock} onChange={e => setNewStock(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
+                  <input type="number" step="0.01" placeholder="Price $" value={newPrice} onChange={e => setNewPrice(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
                 </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', background: '#121214', padding: '8px', borderRadius: '4px', border: '1px solid #27272A' }}>
+                  <input type="checkbox" id="multiSize" checked={hasMultipleSizes} onChange={e => setHasMultipleSizes(e.target.checked)} style={{ width: '16px', height: '16px', accentColor: '#2563EB', cursor: 'pointer' }} />
+                  <label htmlFor="multiSize" style={{ fontSize: '12px', color: '#E4E4E7', cursor: 'pointer', fontWeight: 'bold' }}>Item comes in multiple sizes (S, M, L, XL, XXL, 3XL)</label>
+                </div>
+
+                {!hasMultipleSizes ? (
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                    <input type="text" placeholder="Size (e.g. One Size / Standard)" value={singleSizeName} onChange={e => setSingleSizeName(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+                    <input type="number" placeholder="Initial Stock Count" value={singleStock} onChange={e => setSingleStock(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
+                  </div>
+                ) : (
+                  <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '4px', marginBottom: '10px', border: '1px solid #27272A' }}>
+                    <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 6px 0' }}>Initial Stock per Size:</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                      {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(sz => (
+                        <div key={sz}>
+                          <label style={{ fontSize: '10px', color: '#71717A', display: 'block' }}>{sz}</label>
+                          <input 
+                            type="number" 
+                            value={sizeStockMatrix[sz]} 
+                            onChange={(e) => setSizeStockMatrix({...sizeStockMatrix, [sz]: parseInt(e.target.value) || 0})}
+                            style={{ ...inputStyle, padding: '4px', textAlign: 'center', fontSize: '12px' }} 
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <button type="submit" style={{ width: '100%', background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>Save Item</button>
               </form>
             )}
 
-            {merch.map(item => (
-              <div key={item.id} style={{ background: '#18181B', padding: '12px 14px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>{item.item_name} <span style={{ color: '#A1A1AA', fontSize: '12px' }}>({item.size})</span></h3>
-                  <p style={{ fontSize: '12px', color: '#22C55E', fontWeight: '600', margin: '2px 0 0 0' }}>${item.price} • Stock: {item.stock_count}</p>
+            {merch.map(item => {
+              // Color-coding alerts: < 5 is Red, 5 to 10 is Yellow, > 10 is normal
+              const stock = item.stock_count
+              const alertBg = stock < 5 ? '#450A0A' : stock <= 10 ? '#422006' : '#18181B'
+              const alertBorder = stock < 5 ? '#EF4444' : stock <= 10 ? '#EAB308' : '#27272A'
+              const stockColor = stock < 5 ? '#F87171' : stock <= 10 ? '#FACC15' : '#22C55E'
+
+              return (
+                <div key={item.id} style={{ background: alertBg, padding: '12px 14px', borderRadius: '8px', border: `1px solid ${alertBorder}`, marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.2s' }}>
+                  <div>
+                    <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>{item.item_name} <span style={{ color: '#A1A1AA', fontSize: '12px' }}>({item.hasSizes ? 'S - 3XL' : item.size})</span></h3>
+                    <p style={{ fontSize: '12px', color: stockColor, fontWeight: '600', margin: '2px 0 0 0' }}>
+                      ${item.price} • Stock: {stock} {stock < 5 ? '⚠️ (CRITICAL LOW)' : stock <= 10 ? '⚠️ (LOW STOCK)' : ''}
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button onClick={() => setMerch(merch.map(m => m.id === item.id ? {...m, stock_count: Math.max(0, m.stock_count - 1)} : m))} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Minus size={12} /></button>
+                    <span style={{ fontWeight: 'bold', fontSize: '13px', minWidth: '20px', textAlign: 'center' }}>{stock}</span>
+                    <button onClick={() => setMerch(merch.map(m => m.id === item.id ? {...m, stock_count: m.stock_count + 1} : m))} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Plus size={12} /></button>
+                    <button onClick={() => setMerch(merch.filter(m => m.id !== item.id))} style={{ background: 'none', border: 'none', color: '#EF4444', marginLeft: '6px', cursor: 'pointer' }}><Trash2 size={14} /></button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <button onClick={() => setMerch(merch.map(m => m.id === item.id ? {...m, stock_count: Math.max(0, m.stock_count - 1)} : m))} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Minus size={12} /></button>
-                  <span style={{ fontWeight: 'bold', fontSize: '13px', minWidth: '20px', textAlign: 'center' }}>{item.stock_count}</span>
-                  <button onClick={() => setMerch(merch.map(m => m.id === item.id ? {...m, stock_count: m.stock_count + 1} : m))} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Plus size={12} /></button>
-                  <button onClick={() => setMerch(merch.filter(m => m.id !== item.id))} style={{ background: 'none', border: 'none', color: '#EF4444', marginLeft: '6px', cursor: 'pointer' }}><Trash2 size={14} /></button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 
@@ -485,7 +570,7 @@ export default function App() {
                 <input type="text" placeholder="Set / Show Title" value={setTitle} onChange={e => setSetTitle(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <input type="text" placeholder="Venue Name" value={setVenue} onChange={e => setSetVenue(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
-                  <input type="date" value={setDate} onChange={e => setSetDate(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+                  <input type="date" value={setDate} onChange={e => setDate(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
                 </div>
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                   <input type="text" placeholder="Song Title" value={songInput} onChange={e => setSongInput(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
