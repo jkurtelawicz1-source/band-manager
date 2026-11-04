@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Plus, Minus, Trash2, ShoppingCart, Edit2 } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Plus, Minus, Trash2, ShoppingCart, Edit2, RefreshCw } from 'lucide-react'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('sales')
+  const [syncing, setSyncing] = useState(false)
   
   const [merch, setMerch] = useState([])
   const [sessionSales, setSessionSales] = useState([])
@@ -52,11 +53,13 @@ export default function App() {
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
 
-  // Fetch all data from Supabase on load
-  useEffect(() => {
-    async function loadData() {
-      const { data: m } = await supabase.from('merch').select('*')
-      if (m && m.length > 0) setMerch(m)
+  // Fetch all data from Supabase
+  async function loadData() {
+    setSyncing(true)
+    try {
+      const { data: m, error: me } = await supabase.from('merch').select('*')
+      if (me) console.error('Merch fetch error:', me)
+      if (m) setMerch(m)
 
       const { data: s } = await supabase.from('session_sales').select('*')
       if (s) setSessionSales(s)
@@ -69,7 +72,13 @@ export default function App() {
 
       const { data: t } = await supabase.from('treasury').select('*')
       if (t) setTreasury(t)
+    } catch (err) {
+      console.error('Supabase connection error:', err)
     }
+    setSyncing(false)
+  }
+
+  useEffect(() => {
     loadData()
   }, [])
 
@@ -114,7 +123,8 @@ export default function App() {
     const updatedSales = [saleRecord, ...sessionSales]
     setSessionSales(updatedSales)
     setCart([])
-    await supabase.from('session_sales').insert([saleRecord])
+    const { error } = await supabase.from('session_sales').insert([saleRecord])
+    if (error) console.error('Checkout insert error:', error)
   }
 
   const sessionItemTotals = {}
@@ -128,7 +138,6 @@ export default function App() {
   async function handleCompleteReconciliation() {
     if (sessionSales.length === 0) return
     
-    // Update local merch stock and sync to Supabase
     const updatedMerch = merch.map(m => {
       const soldCount = sessionItemTotals[m.id] || 0
       return { ...m, stock_count: Math.max(0, m.stock_count - soldCount) }
@@ -150,7 +159,6 @@ export default function App() {
     setTreasury(updatedTreasury)
     await supabase.from('treasury').insert([aggregatedTx])
 
-    // Clear session sales
     setSessionSales([])
     await supabase.from('session_sales').delete().neq('id', '0')
   }
@@ -173,7 +181,9 @@ export default function App() {
     }
 
     setMerch([newItem, ...merch])
-    await supabase.from('merch').insert([newItem])
+    const { error } = await supabase.from('merch').insert([newItem])
+    if (error) console.error('Add merch error:', error)
+
     setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
   }
 
@@ -276,7 +286,7 @@ export default function App() {
     }
     setSetlists([newSet, ...setlists])
     await supabase.from('setlists').insert([newSet])
-    setsetTitle(''); setSetVenue(''); setDate(''); setCurrentSongs([]); setShowAddSetlist(false)
+    setSetTitle(''); setSetVenue(''); setDate(''); setCurrentSongs([]); setShowAddSetlist(false)
   }
 
   async function deleteSetlist(id) {
@@ -316,11 +326,16 @@ export default function App() {
       <header style={{ padding: '16px', background: '#18181B', borderBottom: '1px solid #27272A', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>BAND MANAGER</h1>
-          <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Supabase Cloud Sync</p>
+          <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Cloud Sync Active</p>
         </div>
-        <span style={{ fontSize: '11px', background: '#27272A', padding: '4px 8px', borderRadius: '4px', color: '#3B82F6', fontWeight: 'bold' }}>
-          {activeTab.toUpperCase()}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button onClick={loadData} title="Sync with Cloud" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 'bold' }}>
+            <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync'}
+          </button>
+          <span style={{ fontSize: '11px', background: '#27272A', padding: '4px 8px', borderRadius: '4px', color: '#22C55E', fontWeight: 'bold' }}>
+            {activeTab.toUpperCase()}
+          </span>
+        </div>
       </header>
 
       <main style={{ padding: '16px' }}>
