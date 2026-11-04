@@ -122,7 +122,7 @@ export default function App() {
   async function handleCheckout(paymentType) {
     if (cart.length === 0) return
     const saleRecord = {
-      id: Date.now().toString(),
+      id: String(Date.now()),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       payment_type: paymentType,
       items: [...cart],
@@ -147,7 +147,6 @@ export default function App() {
   })
   const sessionTotalMerchRevenue = sessionSales.reduce((sum, s) => sum + s.total, 0)
 
-  // Payment method breakdowns for the Reconciliation modal
   const paymentBreakdowns = sessionSales.reduce((acc, sale) => {
     acc[sale.payment_type] = (acc[sale.payment_type] || 0) + sale.total
     return acc
@@ -170,10 +169,9 @@ export default function App() {
       }
     }
 
-    // Push individual settlement entries or combined grand totals
     if (sessionTotalMerchRevenue > 0) {
       const merchTx = {
-        id: Date.now().toString(),
+        id: String(Date.now()),
         description: `Merch Booth Settlement (${sessionSales.length} orders)`,
         category: 'Merch',
         type: 'digital',
@@ -185,7 +183,7 @@ export default function App() {
 
     if (doorIncomeVal > 0) {
       const doorTx = {
-        id: (Date.now() + 1).toString(),
+        id: String(Date.now() + 1),
         description: `Show Door / Guarantee Cut`,
         category: 'Show Payout',
         type: 'cash',
@@ -195,7 +193,6 @@ export default function App() {
       setTreasury(prev => [doorTx, ...prev])
     }
 
-    // Clear session sales
     await supabase.from('session_sales').delete().neq('id', '0')
 
     setMerch(updatedMerch)
@@ -231,7 +228,7 @@ export default function App() {
       setEditingMerchId(null)
     } else {
       const newItem = { 
-        id: Date.now().toString(), 
+        id: String(Date.now()), 
         item_name: newName, 
         size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
         price: parseFloat(newPrice) || 0, 
@@ -299,7 +296,7 @@ export default function App() {
       setEditingEventId(null)
     } else {
       const newEv = {
-        id: Date.now().toString(),
+        id: String(Date.now()),
         type: eventType,
         title: eventTitle,
         location: eventLocation || 'TBD',
@@ -371,7 +368,7 @@ export default function App() {
     e.preventDefault()
     if (!setTitle) return
     const newSet = {
-      id: Date.now().toString(),
+      id: String(Date.now()),
       title: setTitle,
       venue: setVenue || 'TBD',
       show_date: showDateVal || 'Upcoming',
@@ -404,7 +401,7 @@ export default function App() {
     const rawVal = parseFloat(txAmount) || 0
     const finalAmount = txType === 'expense' ? -Math.abs(rawVal) : Math.abs(rawVal)
     const newTx = {
-      id: Date.now().toString(),
+      id: String(Date.now()),
       description: txDesc,
       category: txCategory,
       type: txWallet,
@@ -468,7 +465,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Reconciliation Totals Modal */}
             {showReconcileModal && (
               <div style={{ background: '#18181B', border: '2px solid #22C55E', borderRadius: '8px', padding: '14px', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#22C55E' }}>Nightly Reconciliation Summary</h3>
@@ -909,7 +905,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Sticky Checkout Drawer with Individual Cart Item Removal */}
+      {/* Sticky Checkout Drawer */}
       {activeTab === 'sales' && cart.length > 0 && (
         <div style={{ position: 'fixed', bottom: '65px', left: 0, right: 0, maxWidth: '480px', margin: '0 auto', background: '#18181B', borderTop: '2px solid #2563EB', padding: '12px 16px', boxSizing: 'border-box', boxShadow: '0 -4px 12px rgba(0,0,0,0.5)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -920,7 +916,6 @@ export default function App() {
             <button onClick={() => setCart([])} style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: '11px', cursor: 'pointer', fontWeight: 'bold' }}>Clear All</button>
           </div>
 
-          {/* Individual Cart Items List */}
           <div style={{ maxHeight: '100px', overflowY: 'auto', marginBottom: '10px', background: '#0F0F10', padding: '6px', borderRadius: '4px', border: '1px solid #27272A' }}>
             {cart.map(cItem => (
               <div key={cItem.cartKey} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', padding: '3px 0', borderBottom: '1px solid #18181B' }}>
