@@ -30,7 +30,7 @@ export default function App() {
   const [showAddSetlist, setShowAddSetlist] = useState(false)
   const [setTitle, setSetTitle] = useState('')
   const [setVenue, setSetVenue] = useState('')
-  const [setDate, setDate] = useState('')
+  const [showDateVal, setShowDateVal] = useState('')
   const [songInput, setSongInput] = useState('')
   const [currentSongs, setCurrentSongs] = useState([])
 
@@ -281,12 +281,12 @@ export default function App() {
       id: Date.now().toString(),
       title: setTitle,
       venue: setVenue || 'TBD',
-      show_date: setDate || 'Upcoming',
+      show_date: showDateVal || 'Upcoming',
       songs: currentSongs.length > 0 ? currentSongs : ['Default Jam']
     }
     setSetlists([newSet, ...setlists])
     await supabase.from('setlists').insert([newSet])
-    setSetTitle(''); setSetVenue(''); setDate(''); setCurrentSongs([]); setShowAddSetlist(false)
+    setSetTitle(''); setSetVenue(''); setShowDateVal(''); setCurrentSongs([]); setShowAddSetlist(false)
   }
 
   async function deleteSetlist(id) {
@@ -330,7 +330,7 @@ export default function App() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button onClick={loadData} title="Sync with Cloud" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 'bold' }}>
-            <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync'}
+            <RefreshCw size={14} /> {syncing ? 'Syncing...' : 'Sync'}
           </button>
           <span style={{ fontSize: '11px', background: '#27272A', padding: '4px 8px', borderRadius: '4px', color: '#22C55E', fontWeight: 'bold' }}>
             {activeTab.toUpperCase()}
@@ -618,7 +618,7 @@ export default function App() {
                 <input type="text" placeholder="Set / Show Title" value={setTitle} onChange={e => setSetTitle(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <input type="text" placeholder="Venue Name" value={setVenue} onChange={e => setSetVenue(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
-                  <input type="date" value={setDate} onChange={e => setDate(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+                  <input type="date" value={showDateVal} onChange={e => setShowDateVal(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
                 </div>
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                   <input type="text" placeholder="Song Title" value={songInput} onChange={e => setSongInput(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
