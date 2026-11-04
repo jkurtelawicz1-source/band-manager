@@ -1,37 +1,21 @@
 import { useState, useEffect } from 'react'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Plus, Minus, Trash2, ShoppingCart, ShieldAlert, CheckCircle, FileText, Edit2 } from 'lucide-react'
+import { supabase } from './supabaseClient'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Plus, Minus, Trash2, ShoppingCart, Edit2 } from 'lucide-react'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('sales')
   
-  // Merch Inventory
-  const [merch, setMerch] = useState(() => {
-    const saved = localStorage.getItem('band_merch_v8')
-    return saved ? JSON.parse(saved) : [
-      { id: '1', item_name: 'Tour T-Shirt', size: 'L', price: 25, stock_count: 24, hasSizes: true },
-      { id: '2', item_name: 'Tour T-Shirt', size: 'XL', price: 25, stock_count: 4, hasSizes: true },
-      { id: '3', item_name: 'Enamel Logo Pin', size: 'One Size', price: 8, stock_count: 3, hasSizes: false },
-      { id: '4', item_name: 'Woven Patch', size: 'Standard', price: 6, stock_count: 12, hasSizes: false }
-    ]
-  })
+  const [merch, setMerch] = useState([])
+  const [sessionSales, setSessionSales] = useState([])
+  const [calendarEvents, setCalendarEvents] = useState([])
+  const [setlists, setSetlists] = useState([])
+  const [treasury, setTreasury] = useState([])
 
-  // Live POS Cart & Session Sales
-  const [cart, setCart] = useState([])
   const [flashCardId, setFlashCardId] = useState(null)
-  const [selectedSizes, setSelectedSizes] = useState({}) // Tracks POS dropdown size per item ID
-  const [sessionSales, setSessionSales] = useState(() => {
-    const saved = localStorage.getItem('band_session_sales_v8')
-    return saved ? JSON.parse(saved) : []
-  })
+  const [selectedSizes, setSelectedSizes] = useState({})
+  const [cart, setCart] = useState([])
 
-  // Calendar / Tour Events
-  const [calendarEvents, setCalendarEvents] = useState(() => {
-    const saved = localStorage.getItem('band_calendar_v8')
-    return saved ? JSON.parse(saved) : [
-      { id: '1', type: 'Show', title: 'The Rusty Anchor', location: 'Wilmington, NC', date: '2026-09-04', guarantee: 350, votes: ['Member1', 'Member2', 'Member3'], promoterConfirmed: true, notes: 'Load-in at 5 PM. Soundcheck at 6 PM.' },
-      { id: '2', type: 'Practice', title: 'Garage Rehearsal', location: 'Boiling Springs, SC', date: '2026-09-06', guarantee: 0, votes: [], promoterConfirmed: false, notes: 'Working on new breakdown transitions.' }
-    ]
-  })
+  // Calendar Modal States
   const [showAddEvent, setShowAddEvent] = useState(false)
   const [editingEventId, setEditingEventId] = useState(null)
   const [eventType, setEventType] = useState('Show')
@@ -41,25 +25,15 @@ export default function App() {
   const [eventGuarantee, setEventGuarantee] = useState('')
   const [eventNotes, setEventNotes] = useState('')
 
-  // Setlists
-  const [setlists, setSetlists] = useState(() => {
-    const saved = localStorage.getItem('band_setlists_v8')
-    return saved ? JSON.parse(saved) : [
-      { id: '1', title: 'Live at The Underground', venue: 'Spartanburg Stage', show_date: '2026-09-04', songs: ['Intro / Feedback', 'Riff Heavyweight', 'Asymmetric Breakdown'] }
-    ]
-  })
+  // Setlist States
   const [showAddSetlist, setShowAddSetlist] = useState(false)
   const [setTitle, setSetTitle] = useState('')
   const [setVenue, setSetVenue] = useState('')
-  const [setDate, setSetDate] = useState('')
+  const [setDate, setDate] = useState('')
   const [songInput, setSongInput] = useState('')
   const [currentSongs, setCurrentSongs] = useState([])
 
-  // Treasury
-  const [treasury, setTreasury] = useState(() => {
-    const saved = localStorage.getItem('band_treasury_v8')
-    return saved ? JSON.parse(saved) : []
-  })
+  // Treasury Modal States
   const [showTxModal, setShowTxModal] = useState(false)
   const [txType, setTxType] = useState('income')
   const [txWallet, setTxWallet] = useState('cash')
@@ -78,12 +52,26 @@ export default function App() {
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
 
-  // Persistence
-  useEffect(() => { localStorage.setItem('band_merch_v8', JSON.stringify(merch)) }, [merch])
-  useEffect(() => { localStorage.setItem('band_session_sales_v8', JSON.stringify(sessionSales)) }, [sessionSales])
-  useEffect(() => { localStorage.setItem('band_calendar_v8', JSON.stringify(calendarEvents)) }, [calendarEvents])
-  useEffect(() => { localStorage.setItem('band_setlists_v8', JSON.stringify(setlists)) }, [setlists])
-  useEffect(() => { localStorage.setItem('band_treasury_v8', JSON.stringify(treasury)) }, [treasury])
+  // Fetch all data from Supabase on load
+  useEffect(() => {
+    async function loadData() {
+      const { data: m } = await supabase.from('merch').select('*')
+      if (m && m.length > 0) setMerch(m)
+
+      const { data: s } = await supabase.from('session_sales').select('*')
+      if (s) setSessionSales(s)
+
+      const { data: c } = await supabase.from('calendar_events').select('*')
+      if (c) setCalendarEvents(c)
+
+      const { data: sl } = await supabase.from('setlists').select('*')
+      if (sl) setSetlists(sl)
+
+      const { data: t } = await supabase.from('treasury').select('*')
+      if (t) setTreasury(t)
+    }
+    loadData()
+  }, [])
 
   const inputStyle = {
     width: '100%',
@@ -95,10 +83,10 @@ export default function App() {
     boxSizing: 'border-box'
   }
 
-  // POS Sales Handlers
+  // POS Handlers
   function handleAddToCart(item) {
     if (item.stock_count <= 0) return
-    const chosenSize = item.hasSizes ? (selectedSizes[item.id] || 'L') : item.size
+    const chosenSize = item.has_sizes ? (selectedSizes[item.id] || 'L') : item.size
     
     setFlashCardId(item.id)
     setTimeout(() => setFlashCardId(null), 250)
@@ -114,17 +102,19 @@ export default function App() {
     }
   }
 
-  function handleCheckout(paymentType) {
+  async function handleCheckout(paymentType) {
     if (cart.length === 0) return
     const saleRecord = {
       id: Date.now().toString(),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      paymentType,
+      payment_type: paymentType,
       items: [...cart],
       total: cart.reduce((sum, i) => sum + (i.price * i.qty), 0)
     }
-    setSessionSales([saleRecord, ...sessionSales])
+    const updatedSales = [saleRecord, ...sessionSales]
+    setSessionSales(updatedSales)
     setCart([])
+    await supabase.from('session_sales').insert([saleRecord])
   }
 
   const sessionItemTotals = {}
@@ -135,13 +125,19 @@ export default function App() {
   })
   const sessionTotalRevenue = sessionSales.reduce((sum, s) => sum + s.total, 0)
 
-  function handleCompleteReconciliation() {
+  async function handleCompleteReconciliation() {
     if (sessionSales.length === 0) return
+    
+    // Update local merch stock and sync to Supabase
     const updatedMerch = merch.map(m => {
       const soldCount = sessionItemTotals[m.id] || 0
       return { ...m, stock_count: Math.max(0, m.stock_count - soldCount) }
     })
     setMerch(updatedMerch)
+
+    for (const m of updatedMerch) {
+      await supabase.from('merch').update({ stock_count: m.stock_count }).eq('id', m.id)
+    }
 
     const aggregatedTx = {
       id: Date.now().toString(),
@@ -150,17 +146,62 @@ export default function App() {
       type: 'digital',
       amount: sessionTotalRevenue
     }
-    setTreasury([aggregatedTx, ...treasury])
+    const updatedTreasury = [aggregatedTx, ...treasury]
+    setTreasury(updatedTreasury)
+    await supabase.from('treasury').insert([aggregatedTx])
+
+    // Clear session sales
     setSessionSales([])
+    await supabase.from('session_sales').delete().neq('id', '0')
+  }
+
+  // Inventory Handlers
+  async function handleAddMerchItem(e) {
+    e.preventDefault()
+    if (!newName || !newPrice) return
+    const totalCalculatedStock = hasMultipleSizes 
+      ? Object.values(sizeStockMatrix).reduce((a, b) => a + Number(b), 0)
+      : (parseInt(singleStock) || 0)
+
+    const newItem = { 
+      id: Date.now().toString(), 
+      item_name: newName, 
+      size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
+      price: parseFloat(newPrice) || 0, 
+      stock_count: totalCalculatedStock,
+      has_sizes: hasMultipleSizes 
+    }
+
+    setMerch([newItem, ...merch])
+    await supabase.from('merch').insert([newItem])
+    setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
+  }
+
+  async function updateStock(id, delta) {
+    const updated = merch.map(m => {
+      if (m.id === id) {
+        const newStock = Math.max(0, m.stock_count + delta)
+        return { ...m, stock_count: newStock }
+      }
+      return m
+    })
+    setMerch(updated)
+    const target = updated.find(m => m.id === id)
+    await supabase.from('merch').update({ stock_count: target.stock_count }).eq('id', id)
+  }
+
+  async function deleteMerch(id) {
+    setMerch(merch.filter(m => m.id !== id))
+    await supabase.from('merch').delete().eq('id', id)
   }
 
   // Calendar Handlers
-  function handleSaveEvent(e) {
+  async function handleSaveEvent(e) {
     e.preventDefault()
     if (!eventTitle || !eventDate) return
 
     if (editingEventId) {
-      setCalendarEvents(calendarEvents.map(ev => ev.id === editingEventId ? {
+      const updatedList = calendarEvents.map(ev => ev.id === editingEventId ? {
         ...ev,
         type: eventType,
         title: eventTitle,
@@ -168,10 +209,13 @@ export default function App() {
         date: eventDate,
         guarantee: parseFloat(eventGuarantee) || 0,
         notes: eventNotes || ''
-      } : ev))
+      } : ev)
+      setCalendarEvents(updatedList)
+      const target = updatedList.find(ev => ev.id === editingEventId)
+      await supabase.from('calendar_events').update(target).eq('id', editingEventId)
       setEditingEventId(null)
     } else {
-      setCalendarEvents([{
+      const newEv = {
         id: Date.now().toString(),
         type: eventType,
         title: eventTitle,
@@ -179,36 +223,38 @@ export default function App() {
         date: eventDate,
         guarantee: parseFloat(eventGuarantee) || 0,
         votes: [],
-        promoterConfirmed: false,
+        promoter_confirmed: false,
         notes: eventNotes || ''
-      }, ...calendarEvents])
+      }
+      setCalendarEvents([newEv, ...calendarEvents])
+      await supabase.from('calendar_events').insert([newEv])
     }
 
     setEventTitle(''); setEventLocation(''); setEventDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(false)
   }
 
-  function startEditEvent(ev) {
-    setEditingEventId(ev.id)
-    setEventType(ev.type)
-    setEventTitle(ev.title)
-    setEventLocation(ev.location)
-    setEventDate(ev.date)
-    setEventGuarantee(ev.guarantee || '')
-    setEventNotes(ev.notes || '')
-    setShowAddEvent(true)
-  }
-
-  function handleVote(eventId, memberName) {
-    setCalendarEvents(calendarEvents.map(ev => {
+  async function handleVote(eventId, memberName) {
+    const updated = calendarEvents.map(ev => {
       if (ev.id !== eventId) return ev
       const hasVoted = ev.votes.includes(memberName)
       const newVotes = hasVoted ? ev.votes.filter(v => v !== memberName) : [...ev.votes, memberName]
       return { ...ev, votes: newVotes }
-    }))
+    })
+    setCalendarEvents(updated)
+    const target = updated.find(ev => ev.id === eventId)
+    await supabase.from('calendar_events').update({ votes: target.votes }).eq('id', eventId)
   }
 
-  function togglePromoterConfirm(eventId) {
-    setCalendarEvents(calendarEvents.map(ev => ev.id === eventId ? { ...ev, promoterConfirmed: !ev.promoterConfirmed } : ev))
+  async function togglePromoterConfirm(eventId) {
+    const updated = calendarEvents.map(ev => ev.id === eventId ? { ...ev, promoter_confirmed: !ev.promoter_confirmed } : ev)
+    setCalendarEvents(updated)
+    const target = updated.find(ev => ev.id === eventId)
+    await supabase.from('calendar_events').update({ promoter_confirmed: target.promoter_confirmed }).eq('id', eventId)
+  }
+
+  async function deleteEvent(id) {
+    setCalendarEvents(calendarEvents.filter(ev => ev.id !== id))
+    await supabase.from('calendar_events').delete().eq('id', id)
   }
 
   // Setlist Handlers
@@ -218,42 +264,51 @@ export default function App() {
     setSongInput('')
   }
 
-  function handleSaveSetlist(e) {
+  async function handleSaveSetlist(e) {
     e.preventDefault()
     if (!setTitle) return
-    setSetlists([{
+    const newSet = {
       id: Date.now().toString(),
       title: setTitle,
       venue: setVenue || 'TBD',
       show_date: setDate || 'Upcoming',
       songs: currentSongs.length > 0 ? currentSongs : ['Default Jam']
-    }, ...setlists])
-    setTitle(''); setVenue(''); setDate(''); setCurrentSongs([]); setShowAddSetlist(false)
+    }
+    setSetlists([newSet, ...setlists])
+    await supabase.from('setlists').insert([newSet])
+    setsetTitle(''); setSetVenue(''); setDate(''); setCurrentSongs([]); setShowAddSetlist(false)
   }
 
-  function deleteSetlist(id) {
+  async function deleteSetlist(id) {
     setSetlists(setlists.filter(s => s.id !== id))
+    await supabase.from('setlists').delete().eq('id', id)
   }
 
   // Treasury Handlers
-  function handleAddTransaction(e) {
+  async function handleAddTransaction(e) {
     e.preventDefault()
     if (!txDesc || !txAmount) return
     const rawVal = parseFloat(txAmount) || 0
     const finalAmount = txType === 'expense' ? -Math.abs(rawVal) : Math.abs(rawVal)
-    setTreasury([{
+    const newTx = {
       id: Date.now().toString(),
       description: txDesc,
       category: txCategory,
       type: txWallet,
       amount: finalAmount
-    }, ...treasury])
+    }
+    setTreasury([newTx, ...treasury])
+    await supabase.from('treasury').insert([newTx])
     setTxDesc(''); setTxAmount(''); setShowTxModal(false)
+  }
+
+  async function deleteTransaction(id) {
+    setTreasury(treasury.filter(t => t.id !== id))
+    await supabase.from('treasury').delete().eq('id', id)
   }
 
   const cashBalance = treasury.filter(t => t.type === 'cash').reduce((sum, t) => sum + Number(t.amount), 0)
   const digitalBalance = treasury.filter(t => t.type === 'digital').reduce((sum, t) => sum + Number(t.amount), 0)
-  const totalBalance = cashBalance + digitalBalance
 
   return (
     <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', paddingBottom: '140px', fontFamily: 'sans-serif', boxSizing: 'border-box' }}>
@@ -261,7 +316,7 @@ export default function App() {
       <header style={{ padding: '16px', background: '#18181B', borderBottom: '1px solid #27272A', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>BAND MANAGER</h1>
-          <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>DIY Tour Command</p>
+          <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Supabase Cloud Sync</p>
         </div>
         <span style={{ fontSize: '11px', background: '#27272A', padding: '4px 8px', borderRadius: '4px', color: '#3B82F6', fontWeight: 'bold' }}>
           {activeTab.toUpperCase()}
@@ -313,15 +368,14 @@ export default function App() {
                     )}
                     <div>
                       <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{item.item_name}</h3>
-                      <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 8px 0' }}>{item.hasSizes ? 'Sizes: S - 3XL' : item.size}</p>
+                      <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 8px 0' }}>{item.has_sizes ? 'Sizes: S - 3XL' : item.size}</p>
                     </div>
 
                     <div>
-                      {item.hasSizes && (
+                      {item.has_sizes && (
                         <select 
                           value={selectedSizes[item.id] || 'L'} 
                           onChange={(e) => setSelectedSizes({...selectedSizes, [item.id]: e.target.value})}
-                          onClick={(e) => e.stopPropagation()}
                           style={{ width: '100%', padding: '4px', background: '#0F0F10', border: '1px solid #27272A', borderRadius: '4px', color: '#fff', fontSize: '11px', marginBottom: '8px' }}
                         >
                           {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(sz => <option key={sz} value={sz}>Size: {sz}</option>)}
@@ -353,7 +407,7 @@ export default function App() {
               sessionSales.map(sale => (
                 <div key={sale.id} style={{ background: '#18181B', padding: '10px 12px', borderRadius: '6px', border: '1px solid #27272A', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
                   <div>
-                    <span style={{ color: '#3B82F6', fontWeight: 'bold' }}>{sale.paymentType}</span> • <span style={{ color: '#A1A1AA' }}>{sale.timestamp}</span>
+                    <span style={{ color: '#3B82F6', fontWeight: 'bold' }}>{sale.payment_type}</span> • <span style={{ color: '#A1A1AA' }}>{sale.timestamp}</span>
                     <p style={{ margin: '2px 0 0 0', color: '#D4D4D8' }}>{sale.items.map(i => `${i.qty}x ${i.item_name} (${i.size})`).join(', ')}</p>
                   </div>
                   <span style={{ fontWeight: 'bold', color: '#22C55E' }}>${sale.total.toFixed(2)}</span>
@@ -363,13 +417,13 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. INVENTORY MANAGEMENT TAB */}
+        {/* 2. INVENTORY TAB */}
         {activeTab === 'inventory' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Merch Inventory</h2>
-                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Color-coded stock alerts & pricing</p>
+                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Cloud synced inventory counts</p>
               </div>
               <button onClick={() => setShowAddMerch(!showAddMerch)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                 {showAddMerch ? 'Cancel' : '+ Add Item'}
@@ -377,39 +431,20 @@ export default function App() {
             </div>
 
             {showAddMerch && (
-              <form onSubmit={(e) => {
-                e.preventDefault()
-                if (!newName || !newPrice) return
-                const totalCalculatedStock = hasMultipleSizes 
-                  ? Object.values(sizeStockMatrix).reduce((a, b) => a + Number(b), 0)
-                  : (parseInt(singleStock) || 0)
-
-                setMerch([{ 
-                  id: Date.now().toString(), 
-                  item_name: newName, 
-                  size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
-                  price: parseFloat(newPrice) || 0, 
-                  stock_count: totalCalculatedStock,
-                  hasSizes: hasMultipleSizes 
-                }, ...merch])
-
-                setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
-              }} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
+              <form onSubmit={handleAddMerchItem} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
                 <input type="text" placeholder="Item Name (e.g. Tour Hoodie)" value={newName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
                 
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                  <input type="number" step="0.01" placeholder="Price $" value={newPrice} onChange={e => setNewPrice(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
-                </div>
+                <input type="number" step="0.01" placeholder="Price $" value={newPrice} onChange={e => setNewPrice(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', background: '#121214', padding: '8px', borderRadius: '4px', border: '1px solid #27272A' }}>
                   <input type="checkbox" id="multiSize" checked={hasMultipleSizes} onChange={e => setHasMultipleSizes(e.target.checked)} style={{ width: '16px', height: '16px', accentColor: '#2563EB', cursor: 'pointer' }} />
-                  <label htmlFor="multiSize" style={{ fontSize: '12px', color: '#E4E4E7', cursor: 'pointer', fontWeight: 'bold' }}>Item comes in multiple sizes (S, M, L, XL, XXL, 3XL)</label>
+                  <label htmlFor="multiSize" style={{ fontSize: '12px', color: '#E4E4E7', cursor: 'pointer', fontWeight: 'bold' }}>Item comes in multiple sizes (S - 3XL)</label>
                 </div>
 
                 {!hasMultipleSizes ? (
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                    <input type="text" placeholder="Size (e.g. One Size / Standard)" value={singleSizeName} onChange={e => setSingleSizeName(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
-                    <input type="number" placeholder="Initial Stock Count" value={singleStock} onChange={e => setSingleStock(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
+                    <input type="text" placeholder="Size (e.g. Standard)" value={singleSizeName} onChange={e => setSingleSizeName(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+                    <input type="number" placeholder="Initial Stock" value={singleStock} onChange={e => setSingleStock(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
                   </div>
                 ) : (
                   <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '4px', marginBottom: '10px', border: '1px solid #27272A' }}>
@@ -435,25 +470,24 @@ export default function App() {
             )}
 
             {merch.map(item => {
-              // Color-coding alerts: < 5 is Red, 5 to 10 is Yellow, > 10 is normal
               const stock = item.stock_count
               const alertBg = stock < 5 ? '#450A0A' : stock <= 10 ? '#422006' : '#18181B'
               const alertBorder = stock < 5 ? '#EF4444' : stock <= 10 ? '#EAB308' : '#27272A'
               const stockColor = stock < 5 ? '#F87171' : stock <= 10 ? '#FACC15' : '#22C55E'
 
               return (
-                <div key={item.id} style={{ background: alertBg, padding: '12px 14px', borderRadius: '8px', border: `1px solid ${alertBorder}`, marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.2s' }}>
+                <div key={item.id} style={{ background: alertBg, padding: '12px 14px', borderRadius: '8px', border: `1px solid ${alertBorder}`, marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>{item.item_name} <span style={{ color: '#A1A1AA', fontSize: '12px' }}>({item.hasSizes ? 'S - 3XL' : item.size})</span></h3>
+                    <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>{item.item_name} <span style={{ color: '#A1A1AA', fontSize: '12px' }}>({item.has_sizes ? 'S - 3XL' : item.size})</span></h3>
                     <p style={{ fontSize: '12px', color: stockColor, fontWeight: '600', margin: '2px 0 0 0' }}>
                       ${item.price} • Stock: {stock} {stock < 5 ? '⚠️ (CRITICAL LOW)' : stock <= 10 ? '⚠️ (LOW STOCK)' : ''}
                     </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <button onClick={() => setMerch(merch.map(m => m.id === item.id ? {...m, stock_count: Math.max(0, m.stock_count - 1)} : m))} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Minus size={12} /></button>
+                    <button onClick={() => updateStock(item.id, -1)} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Minus size={12} /></button>
                     <span style={{ fontWeight: 'bold', fontSize: '13px', minWidth: '20px', textAlign: 'center' }}>{stock}</span>
-                    <button onClick={() => setMerch(merch.map(m => m.id === item.id ? {...m, stock_count: m.stock_count + 1} : m))} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Plus size={12} /></button>
-                    <button onClick={() => setMerch(merch.filter(m => m.id !== item.id))} style={{ background: 'none', border: 'none', color: '#EF4444', marginLeft: '6px', cursor: 'pointer' }}><Trash2 size={14} /></button>
+                    <button onClick={() => updateStock(item.id, 1)} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Plus size={12} /></button>
+                    <button onClick={() => deleteMerch(item.id)} style={{ background: 'none', border: 'none', color: '#EF4444', marginLeft: '6px', cursor: 'pointer' }}><Trash2 size={14} /></button>
                   </div>
                 </div>
               )
@@ -510,23 +544,22 @@ export default function App() {
                       {ev.type === 'Show' && (
                         <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#22C55E' }}>${ev.guarantee}</span>
                       )}
-                      <button onClick={() => startEditEvent(ev)} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Event">
+                      <button onClick={() => { setEditingEventId(ev.id); setEventType(ev.type); setEventTitle(ev.title); setEventLocation(ev.location); setEventDate(ev.date); setEventGuarantee(ev.guarantee || ''); setEventNotes(ev.notes || ''); setShowAddEvent(true); }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Event">
                         <Edit2 size={16} />
                       </button>
-                      <button onClick={() => setCalendarEvents(calendarEvents.filter(e => e.id !== ev.id))} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Event">
+                      <button onClick={() => deleteEvent(ev.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Event">
                         <Trash2 size={16} />
                       </button>
                     </div>
                   </div>
 
-                  {/* Quorum / Voting Section */}
                   <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '6px', margin: '10px 0', border: '1px solid #27272A', fontSize: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                       <span style={{ color: isBandConfirmed ? '#22C55E' : '#EAB308', fontWeight: 'bold' }}>
                         {isBandConfirmed ? '✓ Band Confirmed (3+ Yes)' : `Band Quorum: ${ev.votes.length}/3 Yes votes`}
                       </span>
-                      <button onClick={() => togglePromoterConfirm(ev.id)} style={{ background: ev.promoterConfirmed ? '#166534' : '#27272A', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>
-                        {ev.promoterConfirmed ? '✓ Promoter Confirmed' : 'Promoter Unconfirmed'}
+                      <button onClick={() => togglePromoterConfirm(ev.id)} style={{ background: ev.promoter_confirmed ? '#166534' : '#27272A', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                        {ev.promoter_confirmed ? '✓ Promoter Confirmed' : 'Promoter Unconfirmed'}
                       </button>
                     </div>
                     <div style={{ display: 'flex', gap: '6px' }}>
@@ -614,7 +647,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Balances Display Card */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
               <div style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A' }}>
                 <p style={{ fontSize: '10px', color: '#A1A1AA', margin: 0 }}>CASH ON HAND</p>
@@ -670,7 +702,7 @@ export default function App() {
                     <span style={{ fontWeight: 'bold', fontSize: '14px', color: Number(tx.amount) >= 0 ? '#22C55E' : '#EF4444' }}>
                       {Number(tx.amount) >= 0 ? `+$${Number(tx.amount).toFixed(2)}` : `-$${Math.abs(Number(tx.amount)).toFixed(2)}`}
                     </span>
-                    <button onClick={() => setTreasury(treasury.filter(t => t.id !== tx.id))} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Transaction">
+                    <button onClick={() => deleteTransaction(tx.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Transaction">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -681,7 +713,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Sticky Checkout Drawer (Sales Tab Only) */}
+      {/* Sticky Checkout Drawer */}
       {activeTab === 'sales' && cart.length > 0 && (
         <div style={{ position: 'fixed', bottom: '65px', left: 0, right: 0, maxWidth: '480px', margin: '0 auto', background: '#18181B', borderTop: '2px solid #2563EB', padding: '12px 16px', boxSizing: 'border-box', boxShadow: '0 -4px 12px rgba(0,0,0,0.5)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
