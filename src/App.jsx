@@ -121,24 +121,53 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      const { data: memberships, error } = await supabase
+      // 1. Fetch user's membership rows
+      const { data: memberships, error: memError } = await supabase
         .from('band_members')
-        .select('band_id, role, bands(id, name, invite_code)')
+        .select('band_id, role')
         .eq('user_id', userId)
 
-      if (error) {
-        console.error('Error fetching band memberships:', error.message)
+      if (memError || !memberships || memberships.length === 0) {
         setUserBands([])
         setUserBand(null)
+        setLoadingAuth(false)
         return
       }
 
-      const validMemberships = memberships || []
+      // 2. Fetch the corresponding bands details
+      const bandIds = memberships.map(m => m.band_id)
+      const { data: bandsData, error: bandError } = await supabase
+        .from('bands')
+        .select('id, name, invite_code')
+        .in('id', bandIds)
+
+      if (bandError || !bandsData) {
+        setUserBands([])
+        setUserBand(null)
+        setLoadingAuth(false)
+        return
+      }
+
+      // 3. Combine role + band data together
+      const validMemberships = memberships.map(m => {
+        const matchingBand = bandsData.find(b => b.id === m.band_id)
+        return {
+          band_id: m.band_id,
+          role: m.role,
+          bands: matchingBand
+        }
+      }).filter(m => m.bands) // Remove any orphan memberships
+
       setUserBands(validMemberships)
-      
+
       if (validMemberships.length > 0) {
-        setUserBand(validMemberships[0].bands)
-        setUserRole(validMemberships[0].role)
+        setUserBand(prev => {
+          if (!prev) return validMemberships[0].bands
+          const exists = validMemberships.find(m => m.band_id === prev.id)
+          return exists ? exists.bands : validMemberships[0].bands
+        })
+        const activeRole = validMemberships.find(m => m.band_id === (userBand?.id || validMemberships[0].band_id))
+        setUserRole(activeRole ? activeRole.role : 'member')
       } else {
         setUserBand(null)
       }
