@@ -1,8 +1,24 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle } from 'lucide-react'
 
 export default function App() {
+  const [session, setSession] = useState(null)
+  const [userBand, setUserBand] = useState(null)
+  const [userRole, setUserRole] = useState('member')
+  const [loadingAuth, setLoadingAuth] = useState(true)
+
+  // Auth Form State
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
+  const [authError, setAuthError] = useState(null)
+
+  // Onboarding Form State
+  const [onboardMode, setOnboardMode] = useState(null) // 'create' or 'join'
+  const [newBandName, setNewBandName] = useState('')
+  const [joinInviteCode, setJoinInviteCode] = useState('')
+
   const [activeTab, setActiveTab] = useState('sales')
   const [syncing, setSyncing] = useState(false)
   
@@ -62,23 +78,66 @@ export default function App() {
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
 
-  // Fetch all data from Supabase
+  // 1. Check Auth & Band Membership on Mount
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      if (session) checkUserBand(session.user.id)
+      else setLoadingAuth(false)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      if (session) checkUserBand(session.user.id)
+      else {
+        setUserBand(null)
+        setLoadingAuth(false)
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  async function checkUserBand(userId) {
+    setLoadingAuth(true)
+    try {
+      const { data: membership, error } = await supabase
+        .from('band_members')
+        .select('band_id, role, bands(*)')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+      if (membership && membership.bands) {
+        setUserBand(membership.bands)
+        setUserRole(membership.role)
+      } else {
+        setUserBand(null)
+      }
+    } catch (err) {
+      console.error('Error fetching band membership:', err)
+    }
+    setLoadingAuth(false)
+  }
+
+  // 2. Fetch all data for the user's band
   async function loadData() {
+    if (!userBand) return
     setSyncing(true)
     try {
-      const { data: m } = await supabase.from('merch').select('*')
+      const bId = userBand.id
+      const { data: m } = await supabase.from('merch').select('*').eq('band_id', bId)
       if (m) setMerch(m)
 
-      const { data: s } = await supabase.from('session_sales').select('*')
+      const { data: s } = await supabase.from('session_sales').select('*').eq('band_id', bId)
       if (s) setSessionSales(s)
 
-      const { data: c } = await supabase.from('calendar_events').select('*')
+      const { data: c } = await supabase.from('calendar_events').select('*').eq('band_id', bId)
       if (c) setCalendarEvents(c)
 
-      const { data: sl } = await supabase.from('setlists').select('*')
+      const { data: sl } = await supabase.from('setlists').select('*').eq('band_id', bId)
       if (sl) setSetlists(sl)
 
-      const { data: t } = await supabase.from('treasury').select('*')
+      const { data: t } = await supabase.from('treasury').select('*').eq('band_id', bId)
       if (t) setTreasury(t)
     } catch (err) {
       console.error('Supabase Connection Catch:', err)
@@ -87,8 +146,82 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadData()
-  }, [])
+    if (userBand) {
+      loadData()
+    }
+  }, [userBand])
+
+  // Auth Handlers
+  async function handleAuth(e) {
+    e.preventDefault()
+    setAuthError(null)
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({ email: authEmail, password: authPassword })
+      if (error) setAuthError(error.message)
+      else alert('Check your email for confirmation link, or log in if email confirmation is disabled!')
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword })
+      if (error) setAuthError(error.message)
+    }
+  }
+
+  // Onboarding Handlers
+  async function handleCreateBand(e) {
+    e.preventDefault()
+    if (!newBandName.trim()) return
+    const inviteCode = Math.random().toString(36.substring(2, 8)).toUpperCase()
+    
+    const { data: bandData, error: bandError } = await supabase
+      .from('bands')
+      .insert([{ name: newBandName, invite_code: inviteCode }])
+      .select()
+      .single()
+
+    if (bandError) {
+      alert('Error creating band: ' + bandError.message)
+      return
+    }
+
+    const { error: memberError } = await supabase
+      .from('band_members')
+      .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'admin' }])
+
+    if (memberError) {
+      alert('Error linking band membership: ' + memberError.message)
+      return
+    }
+
+    setUserBand(bandData)
+    setUserRole('admin')
+  }
+
+  async function handleJoinBand(e) {
+    e.preventDefault()
+    if (!joinInviteCode.trim()) return
+
+    const { data: bandData, error: bandError } = await supabase
+      .from('bands')
+      .select('*')
+      .eq('invite_code', joinInviteCode.trim().toUpperCase())
+      .maybeSingle()
+
+    if (bandError || !bandData) {
+      alert('Invalid invite code or band not found.')
+      return
+    }
+
+    const { error: memberError } = await supabase
+      .from('band_members')
+      .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'member' }])
+
+    if (memberError) {
+      alert('Error joining band (you may already be a member): ' + memberError.message)
+      return
+    }
+
+    setUserBand(bandData)
+    setUserRole('member')
+  }
 
   const inputStyle = {
     width: '100%',
@@ -127,6 +260,7 @@ export default function App() {
     if (cart.length === 0) return
     const saleRecord = {
       id: String(Date.now()),
+      band_id: userBand.id,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       payment_type: paymentType,
       items: [...cart],
@@ -177,6 +311,7 @@ export default function App() {
     if (sessionTotalMerchRevenue > 0) {
       const merchTx = {
         id: String(Date.now()),
+        band_id: userBand.id,
         description: `Merch Booth Settlement (${sessionSales.length} orders)`,
         category: 'Merch',
         type: 'digital',
@@ -189,6 +324,7 @@ export default function App() {
     if (doorIncomeVal > 0) {
       const doorTx = {
         id: String(Date.now() + 1),
+        band_id: userBand.id,
         description: `Show Door / Guarantee Cut`,
         category: 'Show Payout',
         type: 'cash',
@@ -198,7 +334,7 @@ export default function App() {
       setTreasury(prev => [doorTx, ...prev])
     }
 
-    await supabase.from('session_sales').delete().neq('id', '0')
+    await supabase.from('session_sales').delete().eq('band_id', userBand.id)
 
     setMerch(updatedMerch)
     setSessionSales([])
@@ -234,6 +370,7 @@ export default function App() {
     } else {
       const newItem = { 
         id: String(Date.now()), 
+        band_id: userBand.id,
         item_name: newName, 
         size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
         price: parseFloat(newPrice) || 0, 
@@ -288,6 +425,7 @@ export default function App() {
     } else {
       const newEv = {
         id: String(Date.now()),
+        band_id: userBand.id,
         type: eventType,
         title: eventTitle,
         location: eventLocation || 'TBD',
@@ -393,6 +531,7 @@ export default function App() {
     } else {
       const newSet = {
         id: String(Date.now()),
+        band_id: userBand.id,
         title: setTitle,
         name: setTitle,
         venue: setVenue || 'TBD',
@@ -429,6 +568,7 @@ export default function App() {
     const finalAmount = txType === 'expense' ? -Math.abs(rawVal) : Math.abs(rawVal)
     const newTx = {
       id: String(Date.now()),
+      band_id: userBand.id,
       description: txDesc,
       category: txCategory,
       type: txWallet,
@@ -460,21 +600,126 @@ export default function App() {
   const digitalBalance = treasury.filter(t => t.type === 'digital').reduce((sum, t) => sum + Number(t.amount), 0)
   const cartTotalAmount = cart.reduce((s, i) => s + (i.price * i.qty), 0)
 
+  // Loading Guard
+  if (loadingAuth) {
+    return (
+      <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', fontFamily: 'sans-serif' }}>
+        <p>Loading Band Manager...</p>
+      </div>
+    )
+  }
+
+  // 1. AUTH SCREEN (Not Logged In)
+  if (!session) {
+    return (
+      <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', padding: '24px', fontFamily: 'sans-serif', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px 0' }}>BAND MANAGER</h1>
+          <p style={{ fontSize: '13px', color: '#A1A1AA', margin: 0 }}>Multi-Band Tour & Merch Platform</p>
+        </div>
+
+        <form onSubmit={handleAuth} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
+          <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0' }}>{isSignUp ? 'Create Account' : 'Sign In'}</h2>
+          
+          {authError && (
+            <div style={{ background: '#450A0A', border: '1px solid #EF4444', color: '#F87171', padding: '8px', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
+              {authError}
+            </div>
+          )}
+
+          <div style={{ marginBottom: '10px' }}>
+            <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>Email</label>
+            <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required style={inputStyle} placeholder="you@band.com" />
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>Password</label>
+            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required style={inputStyle} placeholder="••••••••" />
+          </div>
+
+          <button type="submit" style={{ width: '100%', background: '#2563EB', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', marginBottom: '10px' }}>
+            {isSignUp ? 'Sign Up' : 'Sign In'}
+          </button>
+
+          <button type="button" onClick={() => setIsSignUp(!isSignUp)} style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '12px', width: '100%', cursor: 'pointer' }}>
+            {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+          </button>
+        </form>
+      </div>
+    )
+  }
+
+  // 2. ONBOARDING SCREEN (Logged in, but no band assigned yet)
+  if (!userBand) {
+    return (
+      <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', padding: '24px', fontFamily: 'sans-serif', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <div>
+            <h1 style={{ fontSize: '20px', fontWeight: 'bold', margin: 0 }}>Welcome to Band Manager</h1>
+            <p style={{ fontSize: '12px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Get started by creating or joining a band.</p>
+          </div>
+          <button onClick={() => supabase.auth.signOut()} style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <LogOut size={14} /> Sign Out
+          </button>
+        </div>
+
+        {!onboardMode ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <button onClick={() => setOnboardMode('create')} style={{ background: '#18181B', border: '1px solid #27272A', borderRadius: '8px', padding: '16px', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', color: '#fff' }}>
+              <PlusCircle size={24} color="#22C55E" />
+              <div>
+                <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 2px 0' }}>Create a New Band</h3>
+                <p style={{ fontSize: '12px', color: '#A1A1AA', margin: 0 }}>Set up a workspace and get an invite code for your bandmates.</p>
+              </div>
+            </button>
+
+            <button onClick={() => setOnboardMode('join')} style={{ background: '#18181B', border: '1px solid #27272A', borderRadius: '8px', padding: '16px', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', color: '#fff' }}>
+              <Users size={24} color="#3B82F6" />
+              <div>
+                <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 2px 0' }}>Join an Existing Band</h3>
+                <p style={{ fontSize: '12px', color: '#A1A1AA', margin: 0 }}>Enter an invite code provided by your band manager.</p>
+              </div>
+            </button>
+          </div>
+        ) : onboardMode === 'create' ? (
+          <form onSubmit={handleCreateBand} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0' }}>Create Band</h3>
+            <input type="text" placeholder="Band Name (e.g. This Dying Day)" value={newBandName} onChange={e => setNewBandName(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="submit" style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>Create & Enter</button>
+              <button type="button" onClick={() => setOnboardMode(null)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleJoinBand} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0' }}>Join Band</h3>
+            <input type="text" placeholder="Enter 6-Character Invite Code" value={joinInviteCode} onChange={e => setJoinInviteCode(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px', textTransform: 'uppercase' }} />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="submit" style={{ flex: 1, background: '#2563EB', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>Join Band</button>
+              <button type="button" onClick={() => setOnboardMode(null)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
+            </div>
+          </form>
+        )}
+      </div>
+    )
+  }
+
+  // 3. MAIN APP DASHBOARD
   return (
     <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', paddingBottom: '140px', fontFamily: 'sans-serif', boxSizing: 'border-box' }}>
       
       <header style={{ padding: '16px', background: '#18181B', borderBottom: '1px solid #27272A', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>BAND MANAGER</h1>
-          <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Cloud Sync Active</p>
+          <h1 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>{userBand.name.toUpperCase()}</h1>
+          <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Invite Code: <strong style={{ color: '#3B82F6' }}>{userBand.invite_code}</strong> ({userRole})</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button onClick={loadData} title="Sync with Cloud" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 'bold' }}>
             <RefreshCw size={14} /> {syncing ? 'Syncing...' : 'Sync'}
           </button>
-          <span style={{ fontSize: '11px', background: '#27272A', padding: '4px 8px', borderRadius: '4px', color: '#22C55E', fontWeight: 'bold' }}>
-            {activeTab.toUpperCase()}
-          </span>
+          <button onClick={() => supabase.auth.signOut()} title="Sign Out" style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }}>
+            <LogOut size={14} />
+          </button>
         </div>
       </header>
 
@@ -488,7 +733,7 @@ export default function App() {
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Live Booth POS</h2>
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Merch Sales Total: ${sessionTotalMerchRevenue.toFixed(2)} ({sessionSales.length} orders)</p>
               </div>
-              {sessionSales.length > 0 && (
+              {sessionSales.length > 0 && userRole === 'admin' && (
                 <button onClick={() => setShowReconcileModal(true)} style={{ background: '#16A34A', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>
                   Reconcile Night
                 </button>
@@ -666,12 +911,14 @@ export default function App() {
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Merch Inventory</h2>
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Cloud synced inventory counts</p>
               </div>
-              <button onClick={() => { setEditingMerchId(null); setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(!showAddMerch) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-                {showAddMerch ? 'Cancel' : '+ Add Item'}
-              </button>
+              {userRole === 'admin' && (
+                <button onClick={() => { setEditingMerchId(null); setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(!showAddMerch) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                  {showAddMerch ? 'Cancel' : '+ Add Item'}
+                </button>
+              )}
             </div>
 
-            {showAddMerch && (
+            {showAddMerch && userRole === 'admin' && (
               <form onSubmit={handleSaveMerchItem} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
                 <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 8px 0', color: '#3B82F6' }}>{editingMerchId ? 'Edit Merch Item' : 'Add New Merch Item'}</h3>
                 
@@ -728,22 +975,24 @@ export default function App() {
                       ${item.price} • Stock: {stock} {stock < 5 ? '⚠️ (CRITICAL LOW)' : stock <= 10 ? '⚠️ (LOW STOCK)' : ''}
                     </p>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <button onClick={() => {
-                      setEditingMerchId(item.id)
-                      setNewName(item.item_name)
-                      setNewPrice(item.price)
-                      setHasMultipleSizes(item.has_sizes || false)
-                      if (!item.has_sizes) setSingleStock(item.stock_count)
-                      setShowAddMerch(true)
-                    }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Item">
-                      <Edit2 size={16} />
-                    </button>
+                  {userRole === 'admin' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button onClick={() => {
+                        setEditingMerchId(item.id)
+                        setNewName(item.item_name)
+                        setNewPrice(item.price)
+                        setHasMultipleSizes(item.has_sizes || false)
+                        if (!item.has_sizes) setSingleStock(item.stock_count)
+                        setShowAddMerch(true)
+                      }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Item">
+                        <Edit2 size={16} />
+                      </button>
 
-                    <button onClick={() => deleteMerch(item.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Item">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
+                      <button onClick={() => deleteMerch(item.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Item">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -934,9 +1183,11 @@ export default function App() {
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Band Treasury</h2>
-              <button onClick={() => setShowTxModal(true)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-                + Add Transaction
-              </button>
+              {userRole === 'admin' && (
+                <button onClick={() => setShowTxModal(true)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                  + Add Transaction
+                </button>
+              )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
@@ -950,7 +1201,7 @@ export default function App() {
               </div>
             </div>
 
-            {showTxModal && (
+            {showTxModal && userRole === 'admin' && (
               <form onSubmit={handleAddTransaction} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <select value={txType} onChange={e => setTxType(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
@@ -994,9 +1245,11 @@ export default function App() {
                     <span style={{ fontWeight: 'bold', fontSize: '14px', color: Number(tx.amount) >= 0 ? '#22C55E' : '#EF4444' }}>
                       {Number(tx.amount) >= 0 ? `+$${Number(tx.amount).toFixed(2)}` : `-$${Math.abs(Number(tx.amount)).toFixed(2)}`}
                     </span>
-                    <button onClick={() => deleteTransaction(tx.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Transaction">
-                      <Trash2 size={14} />
-                    </button>
+                    {userRole === 'admin' && (
+                      <button onClick={() => deleteTransaction(tx.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Transaction">
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))
