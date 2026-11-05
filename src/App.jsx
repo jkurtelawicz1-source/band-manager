@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle, ChevronDown } from 'lucide-react'
 
 export default function App() {
   const [session, setSession] = useState(null)
-  const [userBand, setUserBand] = useState(null)
+  const [userBands, setUserBands] = useState([]) // All bands the user belongs to
+  const [userBand, setUserBand] = useState(null) // Currently active band
   const [userRole, setUserRole] = useState('member')
   const [loadingAuth, setLoadingAuth] = useState(true)
 
@@ -18,6 +19,9 @@ export default function App() {
   const [onboardMode, setOnboardMode] = useState(null) // 'create' or 'join'
   const [newBandName, setNewBandName] = useState('')
   const [joinInviteCode, setJoinInviteCode] = useState('')
+
+  // Band Switcher Modal State
+  const [showBandSwitcher, setShowBandSwitcher] = useState(false)
 
   const [activeTab, setActiveTab] = useState('sales')
   const [syncing, setSyncing] = useState(false)
@@ -78,7 +82,7 @@ export default function App() {
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
 
-  // 1. Check Auth & Band Membership on Mount with Persistence Fix
+  // 1. Check Auth & All Band Memberships on Mount
   useEffect(() => {
     let mounted = true
 
@@ -88,7 +92,7 @@ export default function App() {
 
       setSession(currentSession)
       if (currentSession) {
-        await checkUserBand(currentSession.user.id)
+        await fetchUserBands(currentSession.user.id)
       } else {
         setLoadingAuth(false)
       }
@@ -100,8 +104,9 @@ export default function App() {
       if (!mounted) return
       setSession(session)
       if (session) {
-        await checkUserBand(session.user.id)
+        await fetchUserBands(session.user.id)
       } else {
+        setUserBands([])
         setUserBand(null)
         setLoadingAuth(false)
       }
@@ -113,34 +118,39 @@ export default function App() {
     }
   }, [])
 
-  async function checkUserBand(userId) {
+  async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      const { data: membership, error } = await supabase
+      const { data: memberships, error } = await supabase
         .from('band_members')
         .select('band_id, role, bands(*)')
         .eq('user_id', userId)
-        .limit(1)
-        .maybeSingle()
 
       if (error) {
-        console.error('Error fetching band membership:', error)
+        console.error('Error fetching band memberships:', error)
       }
 
-      if (membership && membership.bands) {
-        setUserBand(membership.bands)
-        setUserRole(membership.role)
+      if (memberships && memberships.length > 0) {
+        const validMemberships = memberships.filter(m => m.bands)
+        setUserBands(validMemberships)
+        
+        // If an active band isn't selected yet, default to the first one
+        if (!userBand && validMemberships.length > 0) {
+          setUserBand(validMemberships[0].bands)
+          setUserRole(validMemberships[0].role)
+        }
       } else {
+        setUserBands([])
         setUserBand(null)
       }
     } catch (err) {
-      console.error('Catch error fetching band membership:', err)
+      console.error('Catch error fetching band memberships:', err)
     } finally {
       setLoadingAuth(false)
     }
   }
 
-  // 2. Fetch all data for the user's band
+  // 2. Fetch all data for the currently active band
   async function loadData() {
     if (!userBand) return
     setSyncing(true)
@@ -212,8 +222,11 @@ export default function App() {
       return
     }
 
+    await fetchUserBands(session.user.id)
     setUserBand(bandData)
     setUserRole('admin')
+    setOnboardMode(null)
+    setNewBandName('')
   }
 
   async function handleJoinBand(e) {
@@ -240,8 +253,11 @@ export default function App() {
       return
     }
 
+    await fetchUserBands(session.user.id)
     setUserBand(bandData)
     setUserRole('member')
+    setOnboardMode(null)
+    setJoinInviteCode('')
   }
 
   const inputStyle = {
@@ -670,19 +686,45 @@ export default function App() {
     )
   }
 
-  // 2. ONBOARDING SCREEN (Logged in, but no band assigned yet)
+  // 2. ONBOARDING / BAND SELECTION SCREEN (Logged in, but no active band selected or user has existing bands to pick from)
   if (!userBand) {
     return (
       <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', padding: '24px', fontFamily: 'sans-serif', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
-            <h1 style={{ fontSize: '20px', fontWeight: 'bold', margin: 0 }}>Welcome to Band Manager</h1>
-            <p style={{ fontSize: '12px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Get started by creating or joining a band.</p>
+            <h1 style={{ fontSize: '20px', fontWeight: 'bold', margin: 0 }}>Select or Create Band</h1>
+            <p style={{ fontSize: '12px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Choose from your existing bands or start a new one.</p>
           </div>
           <button onClick={() => supabase.auth.signOut()} style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <LogOut size={14} /> Sign Out
           </button>
         </div>
+
+        {/* If user already belongs to bands, display them for selection */}
+        {userBands.length > 0 && !onboardMode && (
+          <div style={{ marginBottom: '20px' }}>
+            <p style={{ fontSize: '12px', color: '#A1A1AA', marginBottom: '8px', fontWeight: 'bold' }}>Your Existing Bands:</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+              {userBands.map(m => (
+                <button 
+                  key={m.band_id} 
+                  onClick={() => {
+                    setUserBand(m.bands)
+                    setUserRole(m.role)
+                  }}
+                  style={{ background: '#18181B', border: '1px solid #27272A', borderRadius: '8px', padding: '12px 16px', textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff' }}
+                >
+                  <div>
+                    <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{m.bands.name}</h3>
+                    <p style={{ fontSize: '11px', color: '#3B82F6', margin: 0 }}>Role: {m.role} • Code: {m.bands.invite_code}</p>
+                  </div>
+                  <span style={{ fontSize: '12px', background: '#2563EB', color: '#fff', padding: '4px 10px', borderRadius: '4px', fontWeight: 'bold' }}>Select →</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ borderTop: '1px solid #27272A', margin: '16px 0' }}></div>
+          </div>
+        )}
 
         {!onboardMode ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -705,7 +747,7 @@ export default function App() {
         ) : onboardMode === 'create' ? (
           <form onSubmit={handleCreateBand} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
             <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0' }}>Create Band</h3>
-            <input type="text" placeholder="Band Name (e.g. This Dying Day)" value={newBandName} onChange={e => setNewBandName(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
+            <input type="text" placeholder="Band Name (e.g. This Dying Day)" value={newBandName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
             <div style={{ display: 'flex', gap: '8px' }}>
               <button type="submit" style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>Create & Enter</button>
               <button type="button" onClick={() => setOnboardMode(null)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
@@ -731,7 +773,13 @@ export default function App() {
       
       <header style={{ padding: '16px', background: '#18181B', borderBottom: '1px solid #27272A', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>{userBand.name.toUpperCase()}</h1>
+          <button 
+            onClick={() => setShowBandSwitcher(true)}
+            style={{ background: 'none', border: 'none', color: '#fff', textAlign: 'left', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            <h1 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>{userBand.name.toUpperCase()}</h1>
+            <ChevronDown size={14} color="#3B82F6" />
+          </button>
           <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Invite Code: <strong style={{ color: '#3B82F6' }}>{userBand.invite_code}</strong> ({userRole})</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -743,6 +791,59 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {/* Band Switcher Modal */}
+      {showBandSwitcher && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 150, padding: '16px' }}>
+          <div style={{ background: '#18181B', border: '2px solid #2563EB', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '360px', position: 'relative' }}>
+            <button onClick={() => setShowBandSwitcher(false)} style={{ position: 'absolute', top: '12px', right: '12px', background: 'none', border: 'none', color: '#A1A1AA', cursor: 'pointer' }}>
+              <X size={20} />
+            </button>
+            <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0' }}>Switch Active Band</h3>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px', maxHeight: '200px', overflowY: 'auto' }}>
+              {userBands.map(m => (
+                <button
+                  key={m.band_id}
+                  onClick={() => {
+                    setUserBand(m.bands)
+                    setUserRole(m.role)
+                    setShowBandSwitcher(false)
+                  }}
+                  style={{
+                    background: m.band_id === userBand.id ? '#1E3A8A' : '#0F0F10',
+                    border: m.band_id === userBand.id ? '1px solid #3B82F6' : '1px solid #27272A',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    color: '#fff',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                >
+                  <div>
+                    <p style={{ fontWeight: 'bold', margin: '0 0 2px 0', fontSize: '13px' }}>{m.bands.name}</p>
+                    <p style={{ fontSize: '10px', color: '#A1A1AA', margin: 0 }}>Role: {m.role} • Code: {m.bands.invite_code}</p>
+                  </div>
+                  {m.band_id === userBand.id && <span style={{ fontSize: '11px', color: '#60A5FA', fontWeight: 'bold' }}>Active</span>}
+                </button>
+              ))}
+            </div>
+
+            <button 
+              onClick={() => {
+                setShowBandSwitcher(false)
+                setUserBand(null) // triggers selection / onboarding view
+              }}
+              style={{ width: '100%', background: '#27272A', color: '#3B82F6', border: '1px solid #3B82F6', padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
+            >
+              + Create or Join Another Band
+            </button>
+          </div>
+        </div>
+      )}
 
       <main style={{ padding: '16px' }}>
 
