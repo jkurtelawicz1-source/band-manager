@@ -121,24 +121,26 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      let validMemberships = []
-      const { data: allBands } = await supabase
-        .from('bands')
-        .select('id, name, invite_code')
+      const { data: memberships, error } = await supabase
+        .from('band_members')
+        .select('band_id, role, bands(id, name, invite_code)')
+        .eq('user_id', userId)
 
-      if (allBands && allBands.length > 0) {
-        validMemberships = allBands.map(b => ({
-          band_id: b.id,
-          role: 'admin',
-          bands: b
-        }))
+      if (error) {
+        console.error('Error fetching band memberships:', error.message)
+        setUserBands([])
+        setUserBand(null)
+        return
       }
 
+      const validMemberships = memberships || []
       setUserBands(validMemberships)
       
-      if (!userBand && validMemberships.length > 0) {
+      if (validMemberships.length > 0) {
         setUserBand(validMemberships[0].bands)
         setUserRole(validMemberships[0].role)
+      } else {
+        setUserBand(null)
       }
     } catch (err) {
       console.error('Catch error fetching band memberships:', err)
