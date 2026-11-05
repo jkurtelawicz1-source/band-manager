@@ -169,7 +169,7 @@ export default function App() {
   async function handleCreateBand(e) {
     e.preventDefault()
     if (!newBandName.trim()) return
-    const inviteCode = Math.random().toString(36.substring(2, 8)).toUpperCase()
+    const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase()
     
     const { data: bandData, error: bandError } = await supabase
       .from('bands')
