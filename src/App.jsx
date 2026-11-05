@@ -78,24 +78,39 @@ export default function App() {
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
 
-  // 1. Check Auth & Band Membership on Mount
+  // 1. Check Auth & Band Membership on Mount with Persistence Fix
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      if (session) checkUserBand(session.user.id)
-      else setLoadingAuth(false)
-    })
+    let mounted = true
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    async function initAuth() {
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
+      if (!mounted) return
+
+      setSession(currentSession)
+      if (currentSession) {
+        await checkUserBand(currentSession.user.id)
+      } else {
+        setLoadingAuth(false)
+      }
+    }
+
+    initAuth()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return
       setSession(session)
-      if (session) checkUserBand(session.user.id)
-      else {
+      if (session) {
+        await checkUserBand(session.user.id)
+      } else {
         setUserBand(null)
         setLoadingAuth(false)
       }
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   async function checkUserBand(userId) {
@@ -105,7 +120,12 @@ export default function App() {
         .from('band_members')
         .select('band_id, role, bands(*)')
         .eq('user_id', userId)
+        .limit(1)
         .maybeSingle()
+
+      if (error) {
+        console.error('Error fetching band membership:', error)
+      }
 
       if (membership && membership.bands) {
         setUserBand(membership.bands)
@@ -114,9 +134,10 @@ export default function App() {
         setUserBand(null)
       }
     } catch (err) {
-      console.error('Error fetching band membership:', err)
+      console.error('Catch error fetching band membership:', err)
+    } finally {
+      setLoadingAuth(false)
     }
-    setLoadingAuth(false)
   }
 
   // 2. Fetch all data for the user's band
