@@ -121,38 +121,49 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      const { data: memberships, error } = await supabase
+      // 1. Fetch raw memberships for this user
+      const { data: memberships, error: memberError } = await supabase
         .from('band_members')
-        .select(`
-          band_id,
-          role,
-          created_at,
-          bands (
-            id,
-            name,
-            invite_code
-          )
-        `)
+        .select('band_id, role, created_at')
         .eq('user_id', userId)
 
-      if (error) {
-        console.error('Error fetching band memberships:', error)
-      }
-
-      if (memberships && memberships.length > 0) {
-        const validMemberships = memberships.filter(m => m.bands)
-        setUserBands(validMemberships)
-        
-        if (!userBand && validMemberships.length > 0) {
-          setUserBand(validMemberships[0].bands)
-          setUserRole(validMemberships[0].role)
-        }
-      } else {
+      if (memberError || !memberships || memberships.length === 0) {
         setUserBands([])
         setUserBand(null)
+        setLoadingAuth(false)
+        return
+      }
+
+      // 2. Fetch the corresponding bands directly
+      const bandIds = memberships.map(m => m.band_id)
+      const { data: bandsData, error: bandError } = await supabase
+        .from('bands')
+        .select('id, name, invite_code')
+        .in('id', bandIds)
+
+      if (bandError || !bandsData) {
+        setUserBands([])
+        setUserBand(null)
+        setLoadingAuth(false)
+        return
+      }
+
+      // 3. Combine them cleanly
+      const validMemberships = memberships.map(m => {
+        const band = bandsData.find(b => b.id === m.band_id)
+        return band ? { ...m, bands: band } : null
+      }).filter(Boolean)
+
+      setUserBands(validMemberships)
+      
+      if (!userBand && validMemberships.length > 0) {
+        setUserBand(validMemberships[0].bands)
+        setUserRole(validMemberships[0].role)
       }
     } catch (err) {
       console.error('Catch error fetching band memberships:', err)
+      setUserBands([])
+      setUserBand(null)
     } finally {
       setLoadingAuth(false)
     }
