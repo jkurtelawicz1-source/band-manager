@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle, ChevronDown } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle, ChevronDown, Mail } from 'lucide-react'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -121,15 +121,10 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      console.log('Fetching bands for user ID:', userId)
       let validMemberships = []
-
-      // 1. Fetch all bands directly to ensure they appear
-      const { data: allBands, error: bandsError } = await supabase
+      const { data: allBands } = await supabase
         .from('bands')
         .select('id, name, invite_code')
-
-      console.log('Supabase bands query result:', { allBands, bandsError })
 
       if (allBands && allBands.length > 0) {
         validMemberships = allBands.map(b => ({
@@ -139,7 +134,6 @@ export default function App() {
         }))
       }
 
-      console.log('Final validMemberships set:', validMemberships)
       setUserBands(validMemberships)
       
       if (!userBand && validMemberships.length > 0) {
@@ -253,6 +247,34 @@ export default function App() {
     setUserRole('member')
     setOnboardMode(null)
     setJoinInviteCode('')
+  }
+
+  async function handleDeleteBand(bandId, bandName) {
+    if (!window.confirm(`Are you sure you want to delete "${bandName}"? This will permanently delete all merch, calendar events, setlists, and treasury records for this band.`)) return
+
+    await supabase.from('merch').delete().eq('band_id', bandId)
+    await supabase.from('calendar_events').delete().eq('band_id', bandId)
+    await supabase.from('setlists').delete().eq('band_id', bandId)
+    await supabase.from('treasury').delete().eq('band_id', bandId)
+    await supabase.from('session_sales').delete().eq('band_id', bandId)
+    await supabase.from('band_members').delete().eq('band_id', bandId)
+
+    const { error } = await supabase.from('bands').delete().eq('id', bandId)
+    if (error) {
+      alert('Error deleting band: ' + error.message)
+      return
+    }
+
+    if (userBand && userBand.id === bandId) {
+      setUserBand(null)
+    }
+    await fetchUserBands(session.user.id)
+  }
+
+  function handleEmailInvite(bandName, inviteCode) {
+    const subject = encodeURIComponent(`Join ${bandName} on Band Manager`)
+    const body = encodeURIComponent(`Hey!\n\nHere is the invite code to join our band workspace "${bandName}" on Band Manager:\n\nInvite Code: ${inviteCode}\n\nEnter this code in the app to get connected.\n\nLet's rock!`)
+    window.location.href = `mailto:?subject=${subject}&body=${body}`
   }
 
   const inputStyle = {
@@ -701,20 +723,37 @@ export default function App() {
             <p style={{ fontSize: '12px', color: '#A1A1AA', marginBottom: '8px', fontWeight: 'bold' }}>Your Existing Bands:</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
               {userBands.map(m => (
-                <button 
+                <div 
                   key={m.band_id} 
-                  onClick={() => {
-                    setUserBand(m.bands)
-                    setUserRole(m.role)
-                  }}
-                  style={{ background: '#18181B', border: '1px solid #27272A', borderRadius: '8px', padding: '12px 16px', textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff' }}
+                  style={{ background: '#18181B', border: '1px solid #27272A', borderRadius: '8px', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff' }}
                 >
-                  <div>
+                  <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setUserBand(m.bands); setUserRole(m.role); }}>
                     <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{m.bands.name}</h3>
                     <p style={{ fontSize: '11px', color: '#3B82F6', margin: 0 }}>Role: {m.role} • Code: {m.bands.invite_code}</p>
                   </div>
-                  <span style={{ fontSize: '12px', background: '#2563EB', color: '#fff', padding: '4px 10px', borderRadius: '4px', fontWeight: 'bold' }}>Select →</span>
-                </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button 
+                      onClick={() => handleEmailInvite(m.bands.name, m.bands.invite_code)} 
+                      title="Email Invite Code" 
+                      style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
+                    >
+                      <Mail size={14} /> Email
+                    </button>
+                    <button 
+                      onClick={() => handleDeleteBand(m.band_id, m.bands.name)} 
+                      title="Delete Band" 
+                      style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                    <button 
+                      onClick={() => { setUserBand(m.bands); setUserRole(m.role); }}
+                      style={{ fontSize: '12px', background: '#2563EB', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
+                    >
+                      Select →
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
             <div style={{ borderTop: '1px solid #27272A', margin: '16px 0' }}></div>
@@ -775,7 +814,15 @@ export default function App() {
             <h1 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>{userBand.name.toUpperCase()}</h1>
             <ChevronDown size={14} color="#3B82F6" />
           </button>
-          <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Invite Code: <strong style={{ color: '#3B82F6' }}>{userBand.invite_code}</strong> ({userRole})</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
+            <p style={{ fontSize: '11px', color: '#A1A1AA', margin: 0 }}>Code: <strong style={{ color: '#3B82F6' }}>{userBand.invite_code}</strong></p>
+            <button 
+              onClick={() => handleEmailInvite(userBand.name, userBand.invite_code)} 
+              style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '11px', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '2px', fontWeight: 'bold' }}
+            >
+              <Mail size={12} /> Email Code
+            </button>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button onClick={loadData} title="Sync with Cloud" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 'bold' }}>
@@ -798,32 +845,39 @@ export default function App() {
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px', maxHeight: '200px', overflowY: 'auto' }}>
               {userBands.map(m => (
-                <button
+                <div
                   key={m.band_id}
-                  onClick={() => {
-                    setUserBand(m.bands)
-                    setUserRole(m.role)
-                    setShowBandSwitcher(false)
-                  }}
                   style={{
                     background: m.band_id === userBand.id ? '#1E3A8A' : '#0F0F10',
                     border: m.band_id === userBand.id ? '1px solid #3B82F6' : '1px solid #27272A',
                     borderRadius: '8px',
                     padding: '10px 12px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    color: '#fff',
                     display: 'flex',
                     justifyContent: 'space-between',
-                    alignItems: 'center'
+                    alignItems: 'center',
+                    color: '#fff'
                   }}
                 >
-                  <div>
+                  <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setUserBand(m.bands); setUserRole(m.role); setShowBandSwitcher(false); }}>
                     <p style={{ fontWeight: 'bold', margin: '0 0 2px 0', fontSize: '13px' }}>{m.bands.name}</p>
-                    <p style={{ fontSize: '10px', color: '#A1A1AA', margin: 0 }}>Role: {m.role} • Code: {m.bands.invite_code}</p>
+                    <p style={{ fontSize: '10px', color: '#A1A1AA', margin: 0 }}>Code: {m.bands.invite_code}</p>
                   </div>
-                  {m.band_id === userBand.id && <span style={{ fontSize: '11px', color: '#60A5FA', fontWeight: 'bold' }}>Active</span>}
-                </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button onClick={() => handleEmailInvite(m.bands.name, m.bands.invite_code)} title="Email Invite" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer' }}>
+                      <Mail size={13} />
+                    </button>
+                    <button onClick={() => handleDeleteBand(m.band_id, m.bands.name)} title="Delete Band" style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer' }}>
+                      <Trash2 size={13} />
+                    </button>
+                    {m.band_id === userBand.id ? (
+                      <span style={{ fontSize: '11px', color: '#60A5FA', fontWeight: 'bold', marginLeft: '4px' }}>Active</span>
+                    ) : (
+                      <button onClick={() => { setUserBand(m.bands); setUserRole(m.role); setShowBandSwitcher(false); }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}>
+                        Select
+                      </button>
+                    )}
+                  </div>
+                </div>
               ))}
             </div>
 
