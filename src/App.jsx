@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X } from 'lucide-react'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('sales')
@@ -15,6 +15,9 @@ export default function App() {
   const [flashCardId, setFlashCardId] = useState(null)
   const [selectedSizes, setSelectedSizes] = useState({})
   const [cart, setCart] = useState([])
+
+  // Digital QR Code Modal State
+  const [showQrModal, setShowQrModal] = useState(false)
 
   // Reconciliation Modal States
   const [showReconcileModal, setShowReconcileModal] = useState(false)
@@ -138,6 +141,7 @@ export default function App() {
 
     setSessionSales([saleRecord, ...sessionSales])
     setCart([])
+    setShowQrModal(false)
   }
 
   const sessionItemTotals = {}
@@ -454,6 +458,7 @@ export default function App() {
 
   const cashBalance = treasury.filter(t => t.type === 'cash').reduce((sum, t) => sum + Number(t.amount), 0)
   const digitalBalance = treasury.filter(t => t.type === 'digital').reduce((sum, t) => sum + Number(t.amount), 0)
+  const cartTotalAmount = cart.reduce((s, i) => s + (i.price * i.qty), 0)
 
   return (
     <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', paddingBottom: '140px', fontFamily: 'sans-serif', boxSizing: 'border-box' }}>
@@ -489,6 +494,44 @@ export default function App() {
                 </button>
               )}
             </div>
+
+            {/* Digital QR Code Modal */}
+            {showQrModal && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100, padding: '16px' }}>
+                <div style={{ background: '#18181B', border: '2px solid #9333EA', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '340px', textAlign: 'center', position: 'relative' }}>
+                  <button onClick={() => setShowQrModal(false)} style={{ position: 'absolute', top: '12px', right: '12px', background: 'none', border: 'none', color: '#A1A1AA', cursor: 'pointer' }}>
+                    <X size={20} />
+                  </button>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', color: '#9333EA', marginBottom: '4px' }}>
+                    <QrCode size={22} />
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>Scan to Pay</h3>
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#A1A1AA', margin: '0 0 14px 0' }}>CashApp Digital Checkout</p>
+
+                  <div style={{ background: '#27272A', padding: '10px 16px', borderRadius: '8px', marginBottom: '14px', display: 'inline-block' }}>
+                    <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#22C55E' }}>${cartTotalAmount.toFixed(2)}</span>
+                  </div>
+
+                  {/* CashApp QR Code Image */}
+                  <div style={{ background: '#fff', padding: '16px', borderRadius: '8px', marginBottom: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <img 
+                      src="/Thisdyingday.png" 
+                      alt="CashApp QR Code" 
+                      style={{ width: '200px', height: '200px', objectFit: 'contain', borderRadius: '4px' }} 
+                    />
+                    <span style={{ fontSize: '13px', color: '#18181B', fontWeight: 'bold', marginTop: '8px' }}>$ThisDyingDay</span>
+                  </div>
+
+                  <button 
+                    onClick={() => handleCheckout('Digital')}
+                    style={{ width: '100%', background: '#9333EA', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}
+                  >
+                    ✓ Confirm Digital Payment Received
+                  </button>
+                </div>
+              </div>
+            )}
 
             {showReconcileModal && (
               <div style={{ background: '#18181B', border: '2px solid #22C55E', borderRadius: '8px', padding: '14px', marginBottom: '16px' }}>
@@ -969,7 +1012,7 @@ export default function App() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <div>
               <span style={{ fontSize: '12px', color: '#A1A1AA' }}>Cart Total: </span>
-              <span style={{ fontSize: '20px', fontWeight: 'bold', color: '#22C55E' }}>${cart.reduce((s, i) => s + (i.price * i.qty), 0).toFixed(2)}</span>
+              <span style={{ fontSize: '20px', fontWeight: 'bold', color: '#22C55E' }}>${cartTotalAmount.toFixed(2)}</span>
             </div>
             <button onClick={() => setCart([])} style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: '11px', cursor: 'pointer', fontWeight: 'bold' }}>Clear All</button>
           </div>
@@ -991,7 +1034,7 @@ export default function App() {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={() => handleCheckout('Cash')} style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>💵 CASH</button>
             <button onClick={() => handleCheckout('Card')} style={{ flex: 1, background: '#2563EB', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>💳 CARD</button>
-            <button onClick={() => handleCheckout('Digital')} style={{ flex: 1, background: '#9333EA', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>📱 DIGITAL</button>
+            <button onClick={() => setShowQrModal(true)} style={{ flex: 1, background: '#9333EA', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>📱 DIGITAL</button>
           </div>
         </div>
       )}
