@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Plus, Minus, Trash2, ShoppingCart, Edit2, RefreshCw } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('sales')
@@ -32,6 +32,7 @@ export default function App() {
 
   // Setlist States
   const [showAddSetlist, setShowAddSetlist] = useState(false)
+  const [editingSetlistId, setEditingSetlistId] = useState(null)
   const [setTitle, setSetTitle] = useState('')
   const [setVenue, setSetVenue] = useState('')
   const [showDateVal, setShowDateVal] = useState('')
@@ -248,20 +249,6 @@ export default function App() {
     setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
   }
 
-  async function updateStock(id, delta) {
-    const target = merch.find(m => m.id === id)
-    if (!target) return
-    const newStock = Math.max(0, target.stock_count + delta)
-
-    const { error } = await supabase.from('merch').update({ stock_count: newStock }).eq('id', id)
-    if (error) {
-      alert('Stock Update Failed: ' + error.message)
-      return
-    }
-
-    setMerch(merch.map(m => m.id === id ? { ...m, stock_count: newStock } : m))
-  }
-
   async function deleteMerch(id) {
     const { error } = await supabase.from('merch').delete().eq('id', id)
     if (error) {
@@ -364,24 +351,60 @@ export default function App() {
     setSongInput('')
   }
 
+  function handleRemoveSong(index) {
+    setCurrentSongs(currentSongs.filter((_, i) => i !== index))
+  }
+
+  function handleMoveSong(index, direction) {
+    const targetIndex = index + direction
+    if (targetIndex < 0 || targetIndex >= currentSongs.length) return
+    const updated = [...currentSongs]
+    const temp = updated[index]
+    updated[index] = updated[targetIndex]
+    updated[targetIndex] = temp
+    setCurrentSongs(updated)
+  }
+
   async function handleSaveSetlist(e) {
     e.preventDefault()
     if (!setTitle) return
-    const newSet = {
-      id: String(Date.now()),
-      title: setTitle,
-      venue: setVenue || 'TBD',
-      show_date: showDateVal || 'Upcoming',
-      songs: currentSongs.length > 0 ? currentSongs : ['Default Jam']
+
+    if (editingSetlistId) {
+      const updatedSet = {
+        title: setTitle,
+        name: setTitle,
+        venue: setVenue || 'TBD',
+        show_date: showDateVal || 'Upcoming',
+        songs: currentSongs.length > 0 ? currentSongs : ['Default Jam']
+      }
+
+      const { error } = await supabase.from('setlists').update(updatedSet).eq('id', editingSetlistId)
+      if (error) {
+        alert('Setlist Update Failed: ' + error.message)
+        return
+      }
+
+      setSetlists(setlists.map(s => s.id === editingSetlistId ? { ...s, ...updatedSet } : s))
+      setEditingSetlistId(null)
+    } else {
+      const newSet = {
+        id: String(Date.now()),
+        title: setTitle,
+        name: setTitle,
+        venue: setVenue || 'TBD',
+        show_date: showDateVal || 'Upcoming',
+        songs: currentSongs.length > 0 ? currentSongs : ['Default Jam']
+      }
+
+      const { error } = await supabase.from('setlists').insert([newSet])
+      if (error) {
+        alert('Setlist Insert Failed: ' + error.message)
+        return
+      }
+
+      setSetlists([newSet, ...setlists])
     }
 
-    const { error } = await supabase.from('setlists').insert([newSet])
-    if (error) {
-      alert('Setlist Insert Failed: ' + error.message)
-      return
-    }
-
-    setSetlists([newSet, ...setlists])
     setSetTitle(''); setSetVenue(''); setShowDateVal(''); setCurrentSongs([]); setShowAddSetlist(false)
   }
 
@@ -419,6 +442,8 @@ export default function App() {
   }
 
   async function deleteTransaction(id) {
+    if (!window.confirm('Are you sure you want to delete this transaction line item?')) return
+
     const { error } = await supabase.from('treasury').delete().eq('id', id)
     if (error) {
       alert('Transaction Delete Failed: ' + error.message)
@@ -661,11 +686,7 @@ export default function App() {
                       ${item.price} • Stock: {stock} {stock < 5 ? '⚠️ (CRITICAL LOW)' : stock <= 10 ? '⚠️ (LOW STOCK)' : ''}
                     </p>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <button onClick={() => updateStock(item.id, -1)} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Minus size={12} /></button>
-                    <span style={{ fontWeight: 'bold', fontSize: '13px', minWidth: '20px', textAlign: 'center' }}>{stock}</span>
-                    <button onClick={() => updateStock(item.id, 1)} style={{ background: '#27272A', color: '#fff', border: 'none', width: '28px', height: '28px', borderRadius: '4px', cursor: 'pointer' }}><Plus size={12} /></button>
-                    
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <button onClick={() => {
                       setEditingMerchId(item.id)
                       setNewName(item.item_name)
@@ -673,12 +694,12 @@ export default function App() {
                       setHasMultipleSizes(item.has_sizes || false)
                       if (!item.has_sizes) setSingleStock(item.stock_count)
                       setShowAddMerch(true)
-                    }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0, marginLeft: '4px' }} title="Edit Item">
-                      <Edit2 size={15} />
+                    }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Item">
+                      <Edit2 size={16} />
                     </button>
 
-                    <button onClick={() => deleteMerch(item.id)} style={{ background: 'none', border: 'none', color: '#EF4444', marginLeft: '4px', cursor: 'pointer' }} title="Delete Item">
-                      <Trash2 size={15} />
+                    <button onClick={() => deleteMerch(item.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Item">
+                      <Trash2 size={16} />
                     </button>
                   </div>
                 </div>
@@ -785,28 +806,53 @@ export default function App() {
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Setlists</h2>
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Running orders & song lists</p>
               </div>
-              <button onClick={() => setShowAddSetlist(!showAddSetlist)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+              <button onClick={() => {
+                setEditingSetlistId(null)
+                setSetTitle('')
+                setSetVenue('')
+                setShowDateVal('')
+                setCurrentSongs([])
+                setShowAddSetlist(!showAddSetlist)
+              }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                 {showAddSetlist ? 'Cancel' : '+ New Setlist'}
               </button>
             </div>
 
             {showAddSetlist && (
               <form onSubmit={handleSaveSetlist} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
+                <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 8px 0', color: '#3B82F6' }}>
+                  {editingSetlistId ? 'Edit Setlist' : 'Create New Setlist'}
+                </h3>
                 <input type="text" placeholder="Set / Show Title" value={setTitle} onChange={e => setSetTitle(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <input type="text" placeholder="Venue Name" value={setVenue} onChange={e => setSetVenue(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
                   <input type="date" value={showDateVal} onChange={e => setShowDateVal(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
                 </div>
+
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                   <input type="text" placeholder="Song Title" value={songInput} onChange={e => setSongInput(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
                   <button type="button" onClick={handleAddSong} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>Add Song</button>
                 </div>
+
                 {currentSongs.length > 0 && (
-                  <ol style={{ paddingLeft: '20px', fontSize: '13px', color: '#D4D4D8', marginBottom: '10px' }}>
-                    {currentSongs.map((s, idx) => <li key={idx}>{s}</li>)}
-                  </ol>
+                  <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '4px', marginBottom: '10px', border: '1px solid #27272A' }}>
+                    <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 6px 0' }}>Set Running Order (Use arrows to reorder):</p>
+                    {currentSongs.map((song, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: idx < currentSongs.length - 1 ? '1px solid #18181B' : 'none' }}>
+                        <span style={{ fontSize: '12px', color: '#D4D4D8' }}>{idx + 1}. {song}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <button type="button" disabled={idx === 0} onClick={() => handleMoveSong(idx, -1)} style={{ background: '#27272A', color: idx === 0 ? '#52525B' : '#fff', border: 'none', padding: '2px 6px', borderRadius: '3px', cursor: idx === 0 ? 'default' : 'pointer' }} title="Move Up"><ArrowUp size={12} /></button>
+                          <button type="button" disabled={idx === currentSongs.length - 1} onClick={() => handleMoveSong(idx, 1)} style={{ background: '#27272A', color: idx === currentSongs.length - 1 ? '#52525B' : '#fff', border: 'none', padding: '2px 6px', borderRadius: '3px', cursor: idx === currentSongs.length - 1 ? 'default' : 'pointer' }} title="Move Down"><ArrowDown size={12} /></button>
+                          <button type="button" onClick={() => handleRemoveSong(idx)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0, marginLeft: '4px' }} title="Remove Song"><Trash2 size={13} /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
-                <button type="submit" style={{ width: '100%', background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>Save Setlist</button>
+
+                <button type="submit" style={{ width: '100%', background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
+                  {editingSetlistId ? 'Update Setlist' : 'Save Setlist'}
+                </button>
               </form>
             )}
 
@@ -817,12 +863,24 @@ export default function App() {
                     <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0 }}>{list.title}</h3>
                     <p style={{ fontSize: '12px', color: '#A1A1AA', margin: '2px 0 6px 0' }}>{list.venue} • {list.show_date}</p>
                   </div>
-                  <button onClick={() => deleteSetlist(list.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer' }}>
-                    <Trash2 size={16} />
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button onClick={() => {
+                      setEditingSetlistId(list.id)
+                      setSetTitle(list.title || '')
+                      setSetVenue(list.venue || '')
+                      setShowDateVal(list.show_date || '')
+                      setCurrentSongs(list.songs || [])
+                      setShowAddSetlist(true)
+                    }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Setlist">
+                      <Edit2 size={16} />
+                    </button>
+                    <button onClick={() => deleteSetlist(list.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Setlist">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
                 <ol style={{ margin: 0, paddingLeft: '18px', fontSize: '13px', color: '#D4D4D8' }}>
-                  {list.songs.map((song, i) => <li key={i} style={{ padding: '2px 0' }}>{song}</li>)}
+                  {(list.songs || []).map((song, i) => <li key={i} style={{ padding: '2px 0' }}>{song}</li>)}
                 </ol>
               </div>
             ))}
