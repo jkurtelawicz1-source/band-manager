@@ -516,7 +516,7 @@ export default function App() {
                   {/* CashApp QR Code Image */}
                   <div style={{ background: '#fff', padding: '16px', borderRadius: '8px', marginBottom: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                     <img 
-                      src="/Thisdyingday.png" 
+                      src="/cashapp.jpg" 
                       alt="CashApp QR Code" 
                       style={{ width: '200px', height: '200px', objectFit: 'contain', borderRadius: '4px' }} 
                     />
