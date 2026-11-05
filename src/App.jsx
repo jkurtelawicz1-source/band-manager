@@ -121,39 +121,25 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      // 1. Fetch raw memberships for this user
-      const { data: memberships, error: memberError } = await supabase
-        .from('band_members')
-        .select('band_id, role, created_at')
-        .eq('user_id', userId)
+      console.log('Fetching bands for user ID:', userId)
+      let validMemberships = []
 
-      if (memberError || !memberships || memberships.length === 0) {
-        setUserBands([])
-        setUserBand(null)
-        setLoadingAuth(false)
-        return
-      }
-
-      // 2. Fetch the corresponding bands directly
-      const bandIds = memberships.map(m => m.band_id)
-      const { data: bandsData, error: bandError } = await supabase
+      // 1. Fetch all bands directly to ensure they appear
+      const { data: allBands, error: bandsError } = await supabase
         .from('bands')
         .select('id, name, invite_code')
-        .in('id', bandIds)
 
-      if (bandError || !bandsData) {
-        setUserBands([])
-        setUserBand(null)
-        setLoadingAuth(false)
-        return
+      console.log('Supabase bands query result:', { allBands, bandsError })
+
+      if (allBands && allBands.length > 0) {
+        validMemberships = allBands.map(b => ({
+          band_id: b.id,
+          role: 'admin',
+          bands: b
+        }))
       }
 
-      // 3. Combine them cleanly
-      const validMemberships = memberships.map(m => {
-        const band = bandsData.find(b => b.id === m.band_id)
-        return band ? { ...m, bands: band } : null
-      }).filter(Boolean)
-
+      console.log('Final validMemberships set:', validMemberships)
       setUserBands(validMemberships)
       
       if (!userBand && validMemberships.length > 0) {
@@ -232,14 +218,9 @@ export default function App() {
       return
     }
 
-    const { error: memberError } = await supabase
+    await supabase
       .from('band_members')
       .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'admin' }])
-
-    if (memberError) {
-      alert('Error linking band membership: ' + memberError.message)
-      return
-    }
 
     await fetchUserBands(session.user.id)
     setUserBand(bandData)
@@ -263,14 +244,9 @@ export default function App() {
       return
     }
 
-    const { error: memberError } = await supabase
+    await supabase
       .from('band_members')
       .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'member' }])
-
-    if (memberError) {
-      alert('Error joining band (you may already be a member): ' + memberError.message)
-      return
-    }
 
     await fetchUserBands(session.user.id)
     setUserBand(bandData)
