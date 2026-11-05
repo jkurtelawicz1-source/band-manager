@@ -121,7 +121,6 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      // Query band_members and explicitly pull associated band details via foreign key relationship
       const { data: memberships, error } = await supabase
         .from('band_members')
         .select(`
@@ -141,11 +140,9 @@ export default function App() {
       }
 
       if (memberships && memberships.length > 0) {
-        // Filter out any rows where the band didn't resolve properly
         const validMemberships = memberships.filter(m => m.bands)
         setUserBands(validMemberships)
         
-        // Automatically select the most recent band if none is active yet
         if (!userBand && validMemberships.length > 0) {
           setUserBand(validMemberships[0].bands)
           setUserRole(validMemberships[0].role)
