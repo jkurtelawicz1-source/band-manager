@@ -520,7 +520,6 @@ export default function App() {
                       alt="CashApp QR Code" 
                       style={{ width: '200px', height: '200px', objectFit: 'contain', borderRadius: '4px' }} 
                     />
-                    <span style={{ fontSize: '13px', color: '#18181B', fontWeight: 'bold', marginTop: '8px' }}>$ThisDyingDay</span>
                   </div>
 
                   <button 
