@@ -121,9 +121,19 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
+      // Query band_members and explicitly pull associated band details via foreign key relationship
       const { data: memberships, error } = await supabase
         .from('band_members')
-        .select('band_id, role, bands(*)')
+        .select(`
+          band_id,
+          role,
+          created_at,
+          bands (
+            id,
+            name,
+            invite_code
+          )
+        `)
         .eq('user_id', userId)
 
       if (error) {
@@ -131,10 +141,11 @@ export default function App() {
       }
 
       if (memberships && memberships.length > 0) {
+        // Filter out any rows where the band didn't resolve properly
         const validMemberships = memberships.filter(m => m.bands)
         setUserBands(validMemberships)
         
-        // If an active band isn't selected yet, default to the first one
+        // Automatically select the most recent band if none is active yet
         if (!userBand && validMemberships.length > 0) {
           setUserBand(validMemberships[0].bands)
           setUserRole(validMemberships[0].role)
@@ -700,7 +711,7 @@ export default function App() {
           </button>
         </div>
 
-        {/* If user already belongs to bands, display them for selection */}
+        {/* Display existing band memberships if present */}
         {userBands.length > 0 && !onboardMode && (
           <div style={{ marginBottom: '20px' }}>
             <p style={{ fontSize: '12px', color: '#A1A1AA', marginBottom: '8px', fontWeight: 'bold' }}>Your Existing Bands:</p>
@@ -747,7 +758,7 @@ export default function App() {
         ) : onboardMode === 'create' ? (
           <form onSubmit={handleCreateBand} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
             <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0' }}>Create Band</h3>
-            <input type="text" placeholder="Band Name (e.g. This Dying Day)" value={newBandName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
+            <input type="text" placeholder="Band Name (e.g. This Dying Day)" value={newBandName} onChange={e => setNewBandName(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
             <div style={{ display: 'flex', gap: '8px' }}>
               <button type="submit" style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>Create & Enter</button>
               <button type="button" onClick={() => setOnboardMode(null)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
@@ -835,7 +846,7 @@ export default function App() {
             <button 
               onClick={() => {
                 setShowBandSwitcher(false)
-                setUserBand(null) // triggers selection / onboarding view
+                setUserBand(null)
               }}
               style={{ width: '100%', background: '#27272A', color: '#3B82F6', border: '1px solid #3B82F6', padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
             >
@@ -880,7 +891,6 @@ export default function App() {
                     <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#22C55E' }}>${cartTotalAmount.toFixed(2)}</span>
                   </div>
 
-                  {/* CashApp QR Code Image */}
                   <div style={{ background: '#fff', padding: '16px', borderRadius: '8px', marginBottom: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                     <img 
                       src="/cashapp.jpg" 
