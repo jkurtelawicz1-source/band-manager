@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield, Check, Download } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield, Check, Download, AlertTriangle } from 'lucide-react'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -54,6 +54,7 @@ export default function App() {
   const [eventTitle, setEventTitle] = useState('')
   const [eventLocation, setEventLocation] = useState('')
   const [eventDate, setEventDate] = useState('')
+  const [eventEndDate, setEventEndDate] = useState('')
   const [eventGuarantee, setEventGuarantee] = useState('')
   const [eventNotes, setEventNotes] = useState('')
 
@@ -90,7 +91,7 @@ export default function App() {
   const [editingMemberUserId, setEditingMemberUserId] = useState(null)
   const [editMemberNameVal, setEditMemberNameVal] = useState('')
 
-  // 1. Check Auth & Recovery Password Reset Event
+  // 1. Check Auth & Listen for Password Reset Event
   useEffect(() => {
     let mounted = true
 
@@ -191,7 +192,7 @@ export default function App() {
     }
   }
 
-  // 2. Fetch data for active band
+  // 2. Fetch all data for current active band
   async function loadData() {
     if (!userBand) return
     setSyncing(true)
@@ -552,18 +553,52 @@ export default function App() {
     setMerch(merch.filter(m => m.id !== id))
   }
 
+  // Conflict Checking Helper for Calendar Events
+  function getEventConflicts(checkStartStr, checkEndStr, excludeId = null) {
+    if (!checkStartStr) return { showPracticeConflict: false, blackoutConflict: false }
+
+    const start = new Date(checkStartStr)
+    const end = checkEndStr ? new Date(checkEndStr) : start
+
+    let showPracticeConflict = false
+    let blackoutConflict = false
+
+    for (const ev of calendarEvents) {
+      if (excludeId && ev.id === excludeId) continue
+
+      const evStart = new Date(ev.date)
+      const evEnd = ev.end_date ? new Date(ev.end_date) : evStart
+
+      // Check date range overlap
+      const isOverlap = start <= evEnd && end >= evStart
+
+      if (isOverlap) {
+        if (ev.type === 'Blackout') {
+          blackoutConflict = true
+        } else if (ev.type === 'Show' || ev.type === 'Practice') {
+          showPracticeConflict = true
+        }
+      }
+    }
+
+    return { showPracticeConflict, blackoutConflict }
+  }
+
   // Calendar Handlers
   async function handleSaveEvent(e) {
     e.preventDefault()
     if (!eventTitle || !eventDate) return
 
+    const actualEndDate = eventType === 'Blackout' ? (eventEndDate || eventDate) : eventDate
+
     if (editingEventId) {
       const updatedEvent = {
         type: eventType,
         title: eventTitle,
-        location: eventLocation || 'TBD',
+        location: eventType === 'Show' ? (eventLocation || 'TBD') : '',
         date: eventDate,
-        guarantee: parseFloat(eventGuarantee) || 0,
+        end_date: actualEndDate,
+        guarantee: eventType === 'Show' ? (parseFloat(eventGuarantee) || 0) : 0,
         notes: eventNotes || ''
       }
 
@@ -581,9 +616,10 @@ export default function App() {
         band_id: userBand.id,
         type: eventType,
         title: eventTitle,
-        location: eventLocation || 'TBD',
+        location: eventType === 'Show' ? (eventLocation || 'TBD') : '',
         date: eventDate,
-        guarantee: parseFloat(eventGuarantee) || 0,
+        end_date: actualEndDate,
+        guarantee: eventType === 'Show' ? (parseFloat(eventGuarantee) || 0) : 0,
         votes: [],
         promoter_confirmed: false,
         notes: eventNotes || ''
@@ -598,7 +634,7 @@ export default function App() {
       setCalendarEvents([newEv, ...calendarEvents])
     }
 
-    setEventTitle(''); setEventLocation(''); setEventDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(false)
+    setEventTitle(''); setEventLocation(''); setEventDate(''); setEventEndDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(false)
   }
 
   async function handleVote(eventId, memberName) {
@@ -1412,10 +1448,10 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Band Calendar</h2>
-                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Shows, practices, and quorum votes</p>
+                <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Shows, practices, and blackout date ranges</p>
               </div>
               {userRole !== 'merch' && (
-                <button onClick={() => { setEditingEventId(null); setEventTitle(''); setEventLocation(''); setEventDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(!showAddEvent) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                <button onClick={() => { setEditingEventId(null); setEventTitle(''); setEventLocation(''); setEventDate(''); setEventEndDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(!showAddEvent) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                   {showAddEvent ? 'Cancel' : '+ Add Date'}
                 </button>
               )}
@@ -1429,14 +1465,49 @@ export default function App() {
                     <option value="Practice">Practice</option>
                     <option value="Blackout">Blackout</option>
                   </select>
-                  <input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
+                  
+                  {eventType === 'Blackout' ? (
+                    <div style={{ display: 'flex', gap: '4px', flex: 2 }}>
+                      <input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
+                      <input type="date" value={eventEndDate} onChange={e => setEventEndDate(e.target.value)} placeholder="End Date" style={{ ...inputStyle, flex: 1 }} title="End Date (Optional)" />
+                    </div>
+                  ) : (
+                    <input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
+                  )}
                 </div>
-                <input type="text" placeholder="Title / Venue Name" value={eventTitle} onChange={e => setEventTitle(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
-                <input type="text" placeholder="Location / City" value={eventLocation} onChange={e => setEventLocation(e.target.value)} style={{ ...inputStyle, marginBottom: '8px' }} />
+
+                <input type="text" placeholder={eventType === 'Blackout' ? 'Reason (e.g. Vacation / Work Conflict)' : eventType === 'Practice' ? 'Practice Title / Focus' : 'Title / Venue Name'} value={eventTitle} onChange={e => setEventTitle(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
+
+                {/* Only Show Venue/Location/Guarantee for Shows */}
                 {eventType === 'Show' && (
-                  <input type="number" placeholder="Guarantee Payout ($)" value={eventGuarantee} onChange={e => setEventGuarantee(e.target.value)} style={{ ...inputStyle, marginBottom: '8px' }} />
+                  <>
+                    <input type="text" placeholder="Location / City" value={eventLocation} onChange={e => setEventLocation(e.target.value)} style={{ ...inputStyle, marginBottom: '8px' }} />
+                    <input type="number" placeholder="Guarantee Payout ($)" value={eventGuarantee} onChange={e => setEventGuarantee(e.target.value)} style={{ ...inputStyle, marginBottom: '8px' }} />
+                  </>
                 )}
-                <textarea placeholder="Notes (Load-in time, parking info, etc.)" value={eventNotes} onChange={e => setEventNotes(e.target.value)} style={{ ...inputStyle, marginBottom: '8px', height: '60px' }} />
+
+                {/* Conflict Alert Warning Box */}
+                {(() => {
+                  const conflicts = getEventConflicts(eventDate, eventType === 'Blackout' ? eventEndDate : eventDate, editingEventId)
+                  if (conflicts.blackoutConflict) {
+                    return (
+                      <div style={{ background: '#450A0A', border: '1px solid #EF4444', color: '#F87171', padding: '8px', borderRadius: '4px', fontSize: '11px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <AlertTriangle size={14} color="#EF4444" />
+                        <strong>Conflict Warning:</strong> Selected date overlaps with a Blackout Date!
+                      </div>
+                    )
+                  } else if (conflicts.showPracticeConflict) {
+                    return (
+                      <div style={{ background: '#422006', border: '1px solid #EAB308', color: '#FACC15', padding: '8px', borderRadius: '4px', fontSize: '11px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <AlertTriangle size={14} color="#FACC15" />
+                        <strong>Date Interference:</strong> Selected date overlaps with another Show or Practice!
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
+
+                <textarea placeholder="Notes (Load-in time, parking info, details, etc.)" value={eventNotes} onChange={e => setEventNotes(e.target.value)} style={{ ...inputStyle, marginBottom: '8px', height: '60px' }} />
                 <button type="submit" style={{ width: '100%', background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>{editingEventId ? 'Update Date' : 'Save to Calendar'}</button>
               </form>
             )}
@@ -1444,23 +1515,68 @@ export default function App() {
             {calendarEvents.map(ev => {
               const totalMembers = bandMembersList.length
               const isBandConfirmed = totalMembers > 0 && ev.votes.length >= totalMembers
+              
+              const conflicts = getEventConflicts(ev.date, ev.end_date, ev.id)
+              const hasBlackoutConflict = conflicts.blackoutConflict
+              const hasShowPracticeConflict = conflicts.showPracticeConflict
+
+              const borderStyle = hasBlackoutConflict 
+                ? '2px solid #EF4444' 
+                : hasShowPracticeConflict 
+                ? '2px solid #EAB308' 
+                : '1px solid #27272A'
+
+              const cardBg = hasBlackoutConflict 
+                ? '#2A0808' 
+                : hasShowPracticeConflict 
+                ? '#261A05' 
+                : '#18181B'
+
               return (
-                <div key={ev.id} style={{ background: '#18181B', padding: '14px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '12px' }}>
+                <div key={ev.id} style={{ background: cardBg, padding: '14px', borderRadius: '8px', border: borderStyle, marginBottom: '12px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
                     <div>
-                      <span style={{ fontSize: '10px', background: ev.type === 'Show' ? '#2563EB' : ev.type === 'Practice' ? '#16A34A' : '#EF4444', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
-                        {ev.type.toUpperCase()}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '10px', background: ev.type === 'Show' ? '#2563EB' : ev.type === 'Practice' ? '#16A34A' : '#EF4444', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                          {ev.type.toUpperCase()}
+                        </span>
+                        {hasBlackoutConflict && (
+                          <span style={{ fontSize: '10px', background: '#EF4444', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                            <AlertTriangle size={10} /> Blackout Conflict
+                          </span>
+                        )}
+                        {!hasBlackoutConflict && hasShowPracticeConflict && (
+                          <span style={{ fontSize: '10px', background: '#EAB308', color: '#000', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                            <AlertTriangle size={10} /> Date Interference
+                          </span>
+                        )}
+                      </div>
+
                       <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 2px 0' }}>{ev.title}</h3>
-                      <p style={{ fontSize: '12px', color: '#A1A1AA', margin: 0 }}>{ev.location} • {ev.date}</p>
+                      
+                      <p style={{ fontSize: '12px', color: '#A1A1AA', margin: 0 }}>
+                        {ev.location && `${ev.location} • `}
+                        {ev.end_date && ev.end_date !== ev.date ? `${ev.date} to ${ev.end_date}` : ev.date}
+                      </p>
                     </div>
+
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       {ev.type === 'Show' && (
                         <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#22C55E' }}>${ev.guarantee}</span>
                       )}
                       {userRole !== 'merch' && (
                         <>
-                          <button onClick={() => { setEditingEventId(ev.id); setEventType(ev.type); setEventTitle(ev.title); setEventLocation(ev.location); setEventDate(ev.date); setEventGuarantee(ev.guarantee || ''); setEventNotes(ev.notes || ''); setShowAddEvent(true); }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Event">
+                          <button onClick={() => { 
+                            setEditingEventId(ev.id); 
+                            setEventType(ev.type); 
+                            setEventTitle(ev.title); 
+                            setEventLocation(ev.location || ''); 
+                            setEventDate(ev.date); 
+                            setEventEndDate(ev.end_date || ''); 
+                            setEventGuarantee(ev.guarantee || ''); 
+                            setEventNotes(ev.notes || ''); 
+                            setShowAddEvent(true); 
+                          }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Event">
                             <Edit2 size={16} />
                           </button>
                           <button onClick={() => deleteEvent(ev.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Event">
@@ -1471,15 +1587,17 @@ export default function App() {
                     </div>
                   </div>
 
-                  {userRole !== 'merch' && (
+                  {userRole !== 'merch' && ev.type !== 'Blackout' && (
                     <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '6px', margin: '10px 0', border: '1px solid #27272A', fontSize: '12px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                         <span style={{ color: isBandConfirmed ? '#22C55E' : '#EAB308', fontWeight: 'bold' }}>
                           {isBandConfirmed ? `✓ Band Confirmed (${ev.votes.length}/${totalMembers} Yes)` : `Band Quorum: ${ev.votes.length}/${totalMembers} Yes votes needed`}
                         </span>
-                        <button onClick={() => togglePromoterConfirm(ev.id)} style={{ background: ev.promoter_confirmed ? '#166534' : '#27272A', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>
-                          {ev.promoter_confirmed ? '✓ Promoter Confirmed' : 'Promoter Unconfirmed'}
-                        </button>
+                        {ev.type === 'Show' && (
+                          <button onClick={() => togglePromoterConfirm(ev.id)} style={{ background: ev.promoter_confirmed ? '#166534' : '#27272A', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                            {ev.promoter_confirmed ? '✓ Promoter Confirmed' : 'Promoter Unconfirmed'}
+                          </button>
+                        )}
                       </div>
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         {bandMembersList.map(member => {
@@ -1496,7 +1614,7 @@ export default function App() {
                   )}
 
                   {ev.notes && (
-                    <div style={{ fontSize: '12px', color: '#D4D4D8', background: '#121214', padding: '8px', borderRadius: '4px', borderLeft: '3px solid #3B82F6' }}>
+                    <div style={{ fontSize: '12px', color: '#D4D4D8', background: '#121214', padding: '8px', borderRadius: '4px', borderLeft: '3px solid #3B82F6', marginTop: '6px' }}>
                       <strong>Notes:</strong> {ev.notes}
                     </div>
                   )}
