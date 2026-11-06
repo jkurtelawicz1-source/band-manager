@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield, Check } from 'lucide-react'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -38,9 +38,6 @@ export default function App() {
   const [flashCardId, setFlashCardId] = useState(null)
   const [selectedSizes, setSelectedSizes] = useState({})
   const [cart, setCart] = useState([])
-
-  // Digital QR Code Modal State
-  const [showQrModal, setShowQrModal] = useState(false)
 
   // Reconciliation Modal States
   const [showReconcileModal, setShowReconcileModal] = useState(false)
@@ -84,6 +81,10 @@ export default function App() {
   const [sizeStockMatrix, setSizeStockMatrix] = useState({
     'S': 10, 'M': 15, 'L': 15, 'XL': 10, 'XXL': 5, '3XL': 2
   })
+
+  // Admin Member Name Editing State
+  const [editingMemberUserId, setEditingMemberUserId] = useState(null)
+  const [editMemberNameVal, setEditMemberNameVal] = useState('')
 
   // 1. Check Auth & All Band Memberships on Mount
   useEffect(() => {
@@ -188,11 +189,9 @@ export default function App() {
     try {
       const bId = userBand.id
 
-      // Fetch band members list for voting and admin tab
       const { data: members } = await supabase.from('band_members').select('*').eq('band_id', bId)
       if (members) setBandMembersList(members)
 
-      // Sync active role for current band
       const currentMembership = userBands.find(m => m.band_id === bId)
       if (currentMembership) {
         setUserRole(currentMembership.role)
@@ -384,7 +383,6 @@ export default function App() {
 
     setSessionSales([saleRecord, ...sessionSales])
     setCart([])
-    setShowQrModal(false)
   }
 
   const sessionItemTotals = {}
@@ -513,7 +511,7 @@ export default function App() {
     setMerch(merch.filter(m => m.id !== id))
   }
 
-  // Calendar Handlers with 100% Member Quorum Vote Check
+  // Calendar Handlers with Quorum Vote Check
   async function handleSaveEvent(e) {
     e.preventDefault()
     if (!eventTitle || !eventDate) return
@@ -563,7 +561,7 @@ export default function App() {
   }
 
   async function handleVote(eventId, memberName) {
-    if (userRole === 'merch') return // Merch cannot vote
+    if (userRole === 'merch') return
 
     const target = calendarEvents.find(ev => ev.id === eventId)
     if (!target) return
@@ -729,6 +727,23 @@ export default function App() {
       alert('Failed to update role: ' + error.message)
       return
     }
+    loadData()
+  }
+
+  async function handleSaveMemberNameAdmin(memberUserId) {
+    if (userRole !== 'admin' || !editMemberNameVal.trim()) return
+    const { error } = await supabase
+      .from('band_members')
+      .update({ member_name: editMemberNameVal.trim() })
+      .eq('band_id', userBand.id)
+      .eq('user_id', memberUserId)
+
+    if (error) {
+      alert('Failed to update member name: ' + error.message)
+      return
+    }
+    setEditingMemberUserId(null)
+    setEditMemberNameVal('')
     loadData()
   }
 
@@ -1014,42 +1029,6 @@ export default function App() {
                 </button>
               )}
             </div>
-
-            {/* Digital QR Code Modal */}
-            {showQrModal && (
-              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100, padding: '16px' }}>
-                <div style={{ background: '#18181B', border: '2px solid #9333EA', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '340px', textAlign: 'center', position: 'relative' }}>
-                  <button onClick={() => setShowQrModal(false)} style={{ position: 'absolute', top: '12px', right: '12px', background: 'none', border: 'none', color: '#A1A1AA', cursor: 'pointer' }}>
-                    <X size={20} />
-                  </button>
-
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', color: '#9333EA', marginBottom: '4px' }}>
-                    <QrCode size={22} />
-                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>Scan to Pay</h3>
-                  </div>
-                  <p style={{ fontSize: '12px', color: '#A1A1AA', margin: '0 0 14px 0' }}>CashApp Digital Checkout</p>
-
-                  <div style={{ background: '#27272A', padding: '10px 16px', borderRadius: '8px', marginBottom: '14px', display: 'inline-block' }}>
-                    <span style={{ fontSize: '24px', fontWeight: 'bold', color: '#22C55E' }}>${cartTotalAmount.toFixed(2)}</span>
-                  </div>
-
-                  <div style={{ background: '#fff', padding: '16px', borderRadius: '8px', marginBottom: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                    <img 
-                      src="/cashapp.jpg" 
-                      alt="CashApp QR Code" 
-                      style={{ width: '200px', height: '200px', objectFit: 'contain', borderRadius: '4px' }} 
-                    />
-                  </div>
-
-                  <button 
-                    onClick={() => handleCheckout('Digital')}
-                    style={{ width: '100%', background: '#9333EA', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}
-                  >
-                    ✓ Confirm Digital Payment Received
-                  </button>
-                </div>
-              </div>
-            )}
 
             {showReconcileModal && userRole !== 'merch' && (
               <div style={{ background: '#18181B', border: '2px solid #22C55E', borderRadius: '8px', padding: '14px', marginBottom: '16px' }}>
@@ -1562,26 +1541,51 @@ export default function App() {
 
             <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>Band Members ({bandMembersList.length})</h3>
             {bandMembersList.map(member => (
-              <div key={member.user_id} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <p style={{ fontWeight: 'bold', fontSize: '14px', margin: '0 0 2px 0', color: '#fff' }}>{member.member_name || 'Member'}</p>
-                  <p style={{ fontSize: '11px', color: '#A1A1AA', margin: 0, textTransform: 'capitalize' }}>Role: <span style={{ color: '#3B82F6', fontWeight: 'bold' }}>{member.role}</span></p>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <select 
-                    value={member.role} 
-                    onChange={(e) => handleUpdateMemberRole(member.user_id, e.target.value)}
-                    style={{ background: '#0F0F10', color: '#fff', border: '1px solid #27272A', borderRadius: '4px', padding: '4px 6px', fontSize: '11px' }}
-                  >
-                    <option value="admin">Admin</option>
-                    <option value="member">Member</option>
-                    <option value="merch">Merch</option>
-                  </select>
-                  {member.user_id !== session.user.id && (
-                    <button onClick={() => handleRemoveMember(member.user_id, member.member_name)} style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }} title="Remove Member">
-                      <Trash2 size={14} />
-                    </button>
+              <div key={member.user_id} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  {editingMemberUserId === member.user_id ? (
+                    <div style={{ display: 'flex', gap: '6px', flex: 1, marginRight: '8px' }}>
+                      <input 
+                        type="text" 
+                        value={editMemberNameVal} 
+                        onChange={e => setEditMemberNameVal(e.target.value)} 
+                        style={{ ...inputStyle, padding: '4px 8px', fontSize: '13px' }} 
+                      />
+                      <button onClick={() => handleSaveMemberNameAdmin(member.user_id)} style={{ background: '#16A34A', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }} title="Save Name">
+                        <Check size={14} />
+                      </button>
+                      <button onClick={() => setEditingMemberUserId(null)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }} title="Cancel">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <p style={{ fontWeight: 'bold', fontSize: '14px', margin: 0, color: '#fff' }}>{member.member_name || 'Member'}</p>
+                        <button onClick={() => { setEditingMemberUserId(member.user_id); setEditMemberNameVal(member.member_name || ''); }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Name">
+                          <Edit2 size={13} />
+                        </button>
+                      </div>
+                      <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0', textTransform: 'capitalize' }}>Role: <span style={{ color: '#3B82F6', fontWeight: 'bold' }}>{member.role}</span></p>
+                    </div>
                   )}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <select 
+                      value={member.role} 
+                      onChange={(e) => handleUpdateMemberRole(member.user_id, e.target.value)}
+                      style={{ background: '#0F0F10', color: '#fff', border: '1px solid #27272A', borderRadius: '4px', padding: '4px 6px', fontSize: '11px' }}
+                    >
+                      <option value="admin">Admin</option>
+                      <option value="member">Member</option>
+                      <option value="merch">Merch</option>
+                    </select>
+                    {member.user_id !== session.user.id && (
+                      <button onClick={() => handleRemoveMember(member.user_id, member.member_name)} style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }} title="Remove Member">
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -1616,8 +1620,7 @@ export default function App() {
 
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={() => handleCheckout('Cash')} style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>💵 CASH</button>
-            <button onClick={() => handleCheckout('Card')} style={{ flex: 1, background: '#2563EB', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>💳 CARD</button>
-            <button onClick={() => setShowQrModal(true)} style={{ flex: 1, background: '#9333EA', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>📱 DIGITAL</button>
+            <button onClick={() => handleCheckout('Digital')} style={{ flex: 1, background: '#9333EA', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>📱 DIGITAL</button>
           </div>
         </div>
       )}
