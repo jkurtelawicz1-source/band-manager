@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield, Check } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield, Check, Download } from 'lucide-react'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -90,7 +90,7 @@ export default function App() {
   const [editingMemberUserId, setEditingMemberUserId] = useState(null)
   const [editMemberNameVal, setEditMemberNameVal] = useState('')
 
-  // 1. Check Auth & Listen for Recovery Password Reset Event
+  // 1. Check Auth & Recovery Password Reset Event
   useEffect(() => {
     let mounted = true
 
@@ -191,7 +191,7 @@ export default function App() {
     }
   }
 
-  // 2. Fetch all data for active band
+  // 2. Fetch data for active band
   async function loadData() {
     if (!userBand) return
     setSyncing(true)
@@ -715,7 +715,7 @@ export default function App() {
     setSetlists(setlists.filter(s => s.id !== id))
   }
 
-  // Treasury Handlers
+  // Treasury Handlers & CSV Export
   async function handleAddTransaction(e) {
     e.preventDefault()
     if (!txDesc || !txAmount) return
@@ -753,6 +753,42 @@ export default function App() {
       return
     }
     setTreasury(treasury.filter(t => t.id !== id))
+  }
+
+  function handleExportTaxCSV() {
+    if (treasury.length === 0) {
+      alert('No treasury transactions available to export.')
+      return
+    }
+
+    const headers = ['ID', 'Description', 'Category', 'Account Type', 'Income ($)', 'Expense ($)', 'Net Amount ($)']
+    const rows = treasury.map(tx => {
+      const amt = Number(tx.amount) || 0
+      const income = amt >= 0 ? amt.toFixed(2) : '0.00'
+      const expense = amt < 0 ? Math.abs(amt).toFixed(2) : '0.00'
+      const sanitizedDesc = `"${(tx.description || '').replace(/"/g, '""')}"`
+      const sanitizedCat = `"${(tx.category || '').replace(/"/g, '""')}"`
+      
+      return [
+        tx.id,
+        sanitizedDesc,
+        sanitizedCat,
+        tx.type ? tx.type.toUpperCase() : 'CASH',
+        income,
+        expense,
+        amt.toFixed(2)
+      ].join(',')
+    })
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n')
+    const encodedUri = encodeURI(csvContent)
+    const link = document.createElement('a')
+    link.setAttribute('href', encodedUri)
+    const safeBandName = (userBand?.name || 'Band').replace(/[^a-z0-9]/gi, '_').toLowerCase()
+    link.setAttribute('download', `${safeBandName}_treasury_tax_report_${new Date().toISOString().slice(0, 10)}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }
 
   // Admin Tab Member Management Handlers
@@ -1565,9 +1601,14 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Band Treasury</h2>
               {userRole === 'admin' && (
-                <button onClick={() => setShowTxModal(true)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-                  + Add Transaction
-                </button>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={handleExportTaxCSV} style={{ background: '#27272A', border: '1px solid #3B82F6', color: '#3B82F6', padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Download size={14} /> Tax CSV
+                  </button>
+                  <button onClick={() => setShowTxModal(true)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                    + Add Transaction
+                  </button>
+                </div>
               )}
             </div>
 
