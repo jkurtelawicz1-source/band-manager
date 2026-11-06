@@ -4,20 +4,24 @@ import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingC
 
 export default function App() {
   const [session, setSession] = useState(null)
-  const [userBands, setUserBands] = useState([]) // All bands the user belongs to
-  const [userBand, setUserBand] = useState(null) // Currently active band
-  const [userRole, setUserRole] = useState('member') // 'admin', 'member', 'merch'
-  const [bandMembersList, setBandMembersList] = useState([]) // Members of active band
+  const [userBands, setUserBands] = useState([])
+  const [userBand, setUserBand] = useState(null)
+  const [userRole, setUserRole] = useState('member')
+  const [bandMembersList, setBandMembersList] = useState([])
   const [loadingAuth, setLoadingAuth] = useState(true)
 
   // Auth Form State
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
+  const [isForgotPassword, setIsForgotPassword] = useState(false)
+  const [isResettingPassword, setIsResettingPassword] = useState(false)
+  const [newPasswordInput, setNewPasswordInput] = useState('')
   const [authError, setAuthError] = useState(null)
+  const [authSuccessMsg, setAuthSuccessMsg] = useState(null)
 
   // Onboarding Form State
-  const [onboardMode, setOnboardMode] = useState(null) // 'create' or 'join'
+  const [onboardMode, setOnboardMode] = useState(null)
   const [newBandName, setNewBandName] = useState('')
   const [memberNameInput, setMemberNameInput] = useState('')
   const [joinInviteCode, setJoinInviteCode] = useState('')
@@ -25,7 +29,7 @@ export default function App() {
   // Band Switcher Modal State
   const [showBandSwitcher, setShowBandSwitcher] = useState(false)
 
-  // Dynamic Tabs based on permissions ('admin', 'member', 'merch')
+  // Dynamic Tabs based on permissions
   const [activeTab, setActiveTab] = useState('sales')
   const [syncing, setSyncing] = useState(false)
   
@@ -86,7 +90,7 @@ export default function App() {
   const [editingMemberUserId, setEditingMemberUserId] = useState(null)
   const [editMemberNameVal, setEditMemberNameVal] = useState('')
 
-  // 1. Check Auth & All Band Memberships on Mount
+  // 1. Check Auth & Listen for Recovery Password Reset Event
   useEffect(() => {
     let mounted = true
 
@@ -104,12 +108,17 @@ export default function App() {
 
     initAuth()
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return
+
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsResettingPassword(true)
+      }
+
       setSession(session)
-      if (session) {
+      if (session && !isResettingPassword) {
         await fetchUserBands(session.user.id)
-      } else {
+      } else if (!session) {
         setUserBands([])
         setUserBand(null)
         setLoadingAuth(false)
@@ -120,7 +129,7 @@ export default function App() {
       mounted = false
       subscription.unsubscribe()
     }
-  }, [])
+  }, [isResettingPassword])
 
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
@@ -182,7 +191,7 @@ export default function App() {
     }
   }
 
-  // 2. Fetch all data for the currently active band
+  // 2. Fetch all data for active band
   async function loadData() {
     if (!userBand) return
     setSyncing(true)
@@ -227,17 +236,49 @@ export default function App() {
   async function handleAuth(e) {
     e.preventDefault()
     setAuthError(null)
+    setAuthSuccessMsg(null)
+
+    if (isForgotPassword) {
+      const { error } = await supabase.auth.resetPasswordForEmail(authEmail, {
+        redirectTo: window.location.origin
+      })
+      if (error) {
+        setAuthError(error.message)
+      } else {
+        setAuthSuccessMsg('Password reset link sent! Please check your email inbox.')
+      }
+      return
+    }
+
     if (isSignUp) {
       const { error } = await supabase.auth.signUp({ email: authEmail, password: authPassword })
       if (error) setAuthError(error.message)
-      else alert('Check your email for confirmation link, or log in if email confirmation is disabled!')
+      else setAuthSuccessMsg('Account created! Check your email to confirm registration.')
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword })
       if (error) setAuthError(error.message)
     }
   }
 
-  // Onboarding Handlers with Member Name Prompt
+  async function handleUpdatePassword(e) {
+    e.preventDefault()
+    setAuthError(null)
+    setAuthSuccessMsg(null)
+
+    const { error } = await supabase.auth.updateUser({ password: newPasswordInput })
+
+    if (error) {
+      setAuthError(error.message)
+    } else {
+      setAuthSuccessMsg('Your password has been updated successfully!')
+      setTimeout(() => {
+        setIsResettingPassword(false)
+        setNewPasswordInput('')
+      }, 1500)
+    }
+  }
+
+  // Onboarding Handlers
   async function handleCreateBand(e) {
     e.preventDefault()
     if (!newBandName.trim() || !memberNameInput.trim()) return
@@ -511,7 +552,7 @@ export default function App() {
     setMerch(merch.filter(m => m.id !== id))
   }
 
-  // Calendar Handlers with Quorum Vote Check
+  // Calendar Handlers
   async function handleSaveEvent(e) {
     e.preventDefault()
     if (!eventTitle || !eventDate) return
@@ -777,7 +818,51 @@ export default function App() {
     )
   }
 
-  // 1. AUTH SCREEN (Not Logged In)
+  // 1A. PASSWORD RECOVERY / RESET SCREEN
+  if (isResettingPassword) {
+    return (
+      <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', padding: '24px', fontFamily: 'sans-serif', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px 0' }}>BAND MANAGER</h1>
+          <p style={{ fontSize: '13px', color: '#A1A1AA', margin: 0 }}>Reset Your Password</p>
+        </div>
+
+        <form onSubmit={handleUpdatePassword} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
+          <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0' }}>Enter New Password</h2>
+
+          {authError && (
+            <div style={{ background: '#450A0A', border: '1px solid #EF4444', color: '#F87171', padding: '8px', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
+              {authError}
+            </div>
+          )}
+
+          {authSuccessMsg && (
+            <div style={{ background: '#064E3B', border: '1px solid #10B981', color: '#6EE7B7', padding: '8px', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
+              {authSuccessMsg}
+            </div>
+          )}
+
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>New Password</label>
+            <input 
+              type="password" 
+              value={newPasswordInput} 
+              onChange={e => setNewPasswordInput(e.target.value)} 
+              required 
+              style={inputStyle} 
+              placeholder="••••••••" 
+            />
+          </div>
+
+          <button type="submit" style={{ width: '100%', background: '#16A34A', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}>
+            Update & Save Password
+          </button>
+        </form>
+      </div>
+    )
+  }
+
+  // 1B. AUTH SCREEN (Not Logged In)
   if (!session) {
     return (
       <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', padding: '24px', fontFamily: 'sans-serif', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -787,7 +872,9 @@ export default function App() {
         </div>
 
         <form onSubmit={handleAuth} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
-          <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0' }}>{isSignUp ? 'Create Account' : 'Sign In'}</h2>
+          <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0' }}>
+            {isForgotPassword ? 'Reset Password' : isSignUp ? 'Create Account' : 'Sign In'}
+          </h2>
           
           {authError && (
             <div style={{ background: '#450A0A', border: '1px solid #EF4444', color: '#F87171', padding: '8px', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
@@ -795,23 +882,54 @@ export default function App() {
             </div>
           )}
 
-          <div style={{ marginBottom: '10px' }}>
+          {authSuccessMsg && (
+            <div style={{ background: '#064E3B', border: '1px solid #10B981', color: '#6EE7B7', padding: '8px', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
+              {authSuccessMsg}
+            </div>
+          )}
+
+          <div style={{ marginBottom: isForgotPassword ? '16px' : '10px' }}>
             <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>Email</label>
             <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required style={inputStyle} placeholder="you@band.com" />
           </div>
 
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>Password</label>
-            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required style={inputStyle} placeholder="••••••••" />
-          </div>
+          {!isForgotPassword && (
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <label style={{ fontSize: '12px', color: '#A1A1AA' }}>Password</label>
+                <button 
+                  type="button" 
+                  onClick={() => { setIsForgotPassword(true); setAuthError(null); setAuthSuccessMsg(null); }} 
+                  style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '11px', cursor: 'pointer', padding: 0 }}
+                >
+                  Forgot Password?
+                </button>
+              </div>
+              <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required style={inputStyle} placeholder="••••••••" />
+            </div>
+          )}
 
           <button type="submit" style={{ width: '100%', background: '#2563EB', color: '#fff', border: 'none', padding: '10px', borderRadius: '6px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', marginBottom: '10px' }}>
-            {isSignUp ? 'Sign Up' : 'Sign In'}
+            {isForgotPassword ? 'Send Reset Link' : isSignUp ? 'Sign Up' : 'Sign In'}
           </button>
 
-          <button type="button" onClick={() => setIsSignUp(!isSignUp)} style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '12px', width: '100%', cursor: 'pointer' }}>
-            {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
-          </button>
+          {isForgotPassword ? (
+            <button 
+              type="button" 
+              onClick={() => { setIsForgotPassword(false); setAuthError(null); setAuthSuccessMsg(null); }} 
+              style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '12px', width: '100%', cursor: 'pointer' }}
+            >
+              ← Back to Sign In
+            </button>
+          ) : (
+            <button 
+              type="button" 
+              onClick={() => { setIsSignUp(!isSignUp); setAuthError(null); setAuthSuccessMsg(null); }} 
+              style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '12px', width: '100%', cursor: 'pointer' }}
+            >
+              {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+            </button>
+          )}
         </form>
       </div>
     )
@@ -1625,7 +1743,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Bottom Navigation (Role-Adaptive) */}
+      {/* Bottom Navigation */}
       <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: '480px', margin: '0 auto', background: '#18181B', borderTop: '1px solid #27272A', display: 'flex', justifyContent: 'space-around', padding: '10px 0', boxSizing: 'border-box' }}>
         <button onClick={() => setActiveTab('sales')} style={{ background: 'none', border: 'none', color: activeTab === 'sales' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><ShoppingCart size={18} /><span style={{ marginTop: '2px' }}>Sales</span></button>
         <button onClick={() => setActiveTab('inventory')} style={{ background: 'none', border: 'none', color: activeTab === 'inventory' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Package size={18} /><span style={{ marginTop: '2px' }}>Inventory</span></button>
