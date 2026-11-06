@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle, ChevronDown, Mail } from 'lucide-react'
+import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, QrCode, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield } from 'lucide-react'
 
 export default function App() {
   const [session, setSession] = useState(null)
   const [userBands, setUserBands] = useState([]) // All bands the user belongs to
   const [userBand, setUserBand] = useState(null) // Currently active band
-  const [userRole, setUserRole] = useState('member')
+  const [userRole, setUserRole] = useState('member') // 'admin', 'member', 'merch'
+  const [bandMembersList, setBandMembersList] = useState([]) // Members of active band
   const [loadingAuth, setLoadingAuth] = useState(true)
 
   // Auth Form State
@@ -18,11 +19,13 @@ export default function App() {
   // Onboarding Form State
   const [onboardMode, setOnboardMode] = useState(null) // 'create' or 'join'
   const [newBandName, setNewBandName] = useState('')
+  const [memberNameInput, setMemberNameInput] = useState('')
   const [joinInviteCode, setJoinInviteCode] = useState('')
 
   // Band Switcher Modal State
   const [showBandSwitcher, setShowBandSwitcher] = useState(false)
 
+  // Dynamic Tabs based on permissions ('admin', 'member', 'merch')
   const [activeTab, setActiveTab] = useState('sales')
   const [syncing, setSyncing] = useState(false)
   
@@ -121,10 +124,9 @@ export default function App() {
   async function fetchUserBands(userId) {
     setLoadingAuth(true)
     try {
-      // 1. Fetch user's membership rows
       const { data: memberships, error: memError } = await supabase
         .from('band_members')
-        .select('band_id, role')
+        .select('band_id, role, member_name')
         .eq('user_id', userId)
 
       if (memError || !memberships || memberships.length === 0) {
@@ -134,7 +136,6 @@ export default function App() {
         return
       }
 
-      // 2. Fetch the corresponding bands details
       const bandIds = memberships.map(m => m.band_id)
       const { data: bandsData, error: bandError } = await supabase
         .from('bands')
@@ -148,15 +149,15 @@ export default function App() {
         return
       }
 
-      // 3. Combine role + band data together
       const validMemberships = memberships.map(m => {
         const matchingBand = bandsData.find(b => b.id === m.band_id)
         return {
           band_id: m.band_id,
-          role: m.role,
+          role: m.role || 'member',
+          member_name: m.member_name || 'Member',
           bands: matchingBand
         }
-      }).filter(m => m.bands) // Remove any orphan memberships
+      }).filter(m => m.bands)
 
       setUserBands(validMemberships)
 
@@ -166,8 +167,8 @@ export default function App() {
           const exists = validMemberships.find(m => m.band_id === prev.id)
           return exists ? exists.bands : validMemberships[0].bands
         })
-        const activeRole = validMemberships.find(m => m.band_id === (userBand?.id || validMemberships[0].band_id))
-        setUserRole(activeRole ? activeRole.role : 'member')
+        const activeMembership = validMemberships.find(m => m.band_id === (userBand?.id || validMemberships[0].band_id))
+        setUserRole(activeMembership ? activeMembership.role : 'member')
       } else {
         setUserBand(null)
       }
@@ -186,6 +187,17 @@ export default function App() {
     setSyncing(true)
     try {
       const bId = userBand.id
+
+      // Fetch band members list for voting and admin tab
+      const { data: members } = await supabase.from('band_members').select('*').eq('band_id', bId)
+      if (members) setBandMembersList(members)
+
+      // Sync active role for current band
+      const currentMembership = userBands.find(m => m.band_id === bId)
+      if (currentMembership) {
+        setUserRole(currentMembership.role)
+      }
+
       const { data: m } = await supabase.from('merch').select('*').eq('band_id', bId)
       if (m) setMerch(m)
 
@@ -210,7 +222,7 @@ export default function App() {
     if (userBand) {
       loadData()
     }
-  }, [userBand])
+  }, [userBand, userBands])
 
   // Auth Handlers
   async function handleAuth(e) {
@@ -226,10 +238,10 @@ export default function App() {
     }
   }
 
-  // Onboarding Handlers
+  // Onboarding Handlers with Member Name Prompt
   async function handleCreateBand(e) {
     e.preventDefault()
-    if (!newBandName.trim()) return
+    if (!newBandName.trim() || !memberNameInput.trim()) return
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase()
     
     const { data: bandData, error: bandError } = await supabase
@@ -243,20 +255,26 @@ export default function App() {
       return
     }
 
-    await supabase
+    const { error: memberError } = await supabase
       .from('band_members')
-      .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'admin' }])
+      .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'admin', member_name: memberNameInput.trim() }])
+
+    if (memberError) {
+      alert('Error creating membership: ' + memberError.message)
+      return
+    }
 
     await fetchUserBands(session.user.id)
     setUserBand(bandData)
     setUserRole('admin')
     setOnboardMode(null)
     setNewBandName('')
+    setMemberNameInput('')
   }
 
   async function handleJoinBand(e) {
     e.preventDefault()
-    if (!joinInviteCode.trim()) return
+    if (!joinInviteCode.trim() || !memberNameInput.trim()) return
 
     const { data: bandData, error: bandError } = await supabase
       .from('bands')
@@ -269,19 +287,25 @@ export default function App() {
       return
     }
 
-    await supabase
+    const { error: memberError } = await supabase
       .from('band_members')
-      .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'member' }])
+      .insert([{ user_id: session.user.id, band_id: bandData.id, role: 'member', member_name: memberNameInput.trim() }])
+
+    if (memberError) {
+      alert('Error joining band: ' + memberError.message)
+      return
+    }
 
     await fetchUserBands(session.user.id)
     setUserBand(bandData)
     setUserRole('member')
     setOnboardMode(null)
     setJoinInviteCode('')
+    setMemberNameInput('')
   }
 
   async function handleDeleteBand(bandId, bandName) {
-    if (!window.confirm(`Are you sure you want to delete "${bandName}"? This will permanently delete all merch, calendar events, setlists, and treasury records for this band.`)) return
+    if (!window.confirm(`Are you sure you want to delete "${bandName}"? This will permanently delete all data for this band.`)) return
 
     await supabase.from('merch').delete().eq('band_id', bandId)
     await supabase.from('calendar_events').delete().eq('band_id', bandId)
@@ -380,6 +404,11 @@ export default function App() {
   const grandTotalDay = sessionTotalMerchRevenue + doorIncomeVal
 
   async function handleConfirmReconciliation() {
+    if (userRole === 'merch') {
+      alert('Merch permission level cannot reconcile sales.')
+      return
+    }
+
     const updatedMerch = merch.map(m => {
       const soldCount = sessionItemTotals[m.id] || 0
       return { ...m, stock_count: Math.max(0, m.stock_count - soldCount) }
@@ -484,7 +513,7 @@ export default function App() {
     setMerch(merch.filter(m => m.id !== id))
   }
 
-  // Calendar Handlers
+  // Calendar Handlers with 100% Member Quorum Vote Check
   async function handleSaveEvent(e) {
     e.preventDefault()
     if (!eventTitle || !eventDate) return
@@ -534,6 +563,8 @@ export default function App() {
   }
 
   async function handleVote(eventId, memberName) {
+    if (userRole === 'merch') return // Merch cannot vote
+
     const target = calendarEvents.find(ev => ev.id === eventId)
     if (!target) return
     const hasVoted = target.votes.includes(memberName)
@@ -671,6 +702,10 @@ export default function App() {
   }
 
   async function deleteTransaction(id) {
+    if (userRole === 'member' || userRole === 'merch') {
+      alert('Band Members and Merch permissions cannot delete transactions from the treasury.')
+      return
+    }
     if (!window.confirm('Are you sure you want to delete this transaction line item?')) return
 
     const { error } = await supabase.from('treasury').delete().eq('id', id)
@@ -679,6 +714,39 @@ export default function App() {
       return
     }
     setTreasury(treasury.filter(t => t.id !== id))
+  }
+
+  // Admin Tab Member Management Handlers
+  async function handleUpdateMemberRole(memberUserId, newRole) {
+    if (userRole !== 'admin') return
+    const { error } = await supabase
+      .from('band_members')
+      .update({ role: newRole })
+      .eq('band_id', userBand.id)
+      .eq('user_id', memberUserId)
+
+    if (error) {
+      alert('Failed to update role: ' + error.message)
+      return
+    }
+    loadData()
+  }
+
+  async function handleRemoveMember(memberUserId, memberName) {
+    if (userRole !== 'admin') return
+    if (!window.confirm(`Remove ${memberName} from this band?`)) return
+
+    const { error } = await supabase
+      .from('band_members')
+      .delete()
+      .eq('band_id', userBand.id)
+      .eq('user_id', memberUserId)
+
+    if (error) {
+      alert('Failed to remove member: ' + error.message)
+      return
+    }
+    loadData()
   }
 
   const cashBalance = treasury.filter(t => t.type === 'cash').reduce((sum, t) => sum + Number(t.amount), 0)
@@ -734,7 +802,7 @@ export default function App() {
     )
   }
 
-  // 2. ONBOARDING / BAND SELECTION SCREEN (Logged in, but no active band selected or user has existing bands to pick from)
+  // 2. ONBOARDING / BAND SELECTION SCREEN
   if (!userBand) {
     return (
       <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', padding: '24px', fontFamily: 'sans-serif', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -748,7 +816,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Display existing band memberships if present */}
         {userBands.length > 0 && !onboardMode && (
           <div style={{ marginBottom: '20px' }}>
             <p style={{ fontSize: '12px', color: '#A1A1AA', marginBottom: '8px', fontWeight: 'bold' }}>Your Existing Bands:</p>
@@ -760,7 +827,7 @@ export default function App() {
                 >
                   <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setUserBand(m.bands); setUserRole(m.role); }}>
                     <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{m.bands.name}</h3>
-                    <p style={{ fontSize: '11px', color: '#3B82F6', margin: 0 }}>Role: {m.role} • Code: {m.bands.invite_code}</p>
+                    <p style={{ fontSize: '11px', color: '#3B82F6', margin: 0 }}>Name: {m.member_name} • Role: {m.role} • Code: {m.bands.invite_code}</p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <button 
@@ -770,13 +837,15 @@ export default function App() {
                     >
                       <Mail size={14} /> Email
                     </button>
-                    <button 
-                      onClick={() => handleDeleteBand(m.band_id, m.bands.name)} 
-                      title="Delete Band" 
-                      style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {m.role === 'admin' && (
+                      <button 
+                        onClick={() => handleDeleteBand(m.band_id, m.bands.name)} 
+                        title="Delete Band" 
+                        style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                     <button 
                       onClick={() => { setUserBand(m.bands); setUserRole(m.role); }}
                       style={{ fontSize: '12px', background: '#2563EB', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
@@ -812,7 +881,8 @@ export default function App() {
         ) : onboardMode === 'create' ? (
           <form onSubmit={handleCreateBand} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
             <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0' }}>Create Band</h3>
-            <input type="text" placeholder="Band Name (e.g. This Dying Day)" value={newBandName} onChange={e => setNewBandName(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
+            <input type="text" placeholder="Band Name (e.g. This Dying Day)" value={newBandName} onChange={e => setNewBandName(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
+            <input type="text" placeholder="Your Name / Stage Name (e.g. Josh)" value={memberNameInput} onChange={e => setMemberNameInput(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
             <div style={{ display: 'flex', gap: '8px' }}>
               <button type="submit" style={{ flex: 1, background: '#16A34A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>Create & Enter</button>
               <button type="button" onClick={() => setOnboardMode(null)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
@@ -821,7 +891,8 @@ export default function App() {
         ) : (
           <form onSubmit={handleJoinBand} style={{ background: '#18181B', padding: '20px', borderRadius: '12px', border: '1px solid #27272A' }}>
             <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0' }}>Join Band</h3>
-            <input type="text" placeholder="Enter 6-Character Invite Code" value={joinInviteCode} onChange={e => setJoinInviteCode(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px', textTransform: 'uppercase' }} />
+            <input type="text" placeholder="Enter 6-Character Invite Code" value={joinInviteCode} onChange={e => setJoinInviteCode(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px', textTransform: 'uppercase' }} />
+            <input type="text" placeholder="Your Name / Stage Name (e.g. Josh)" value={memberNameInput} onChange={e => setMemberNameInput(e.target.value)} required style={{ ...inputStyle, marginBottom: '12px' }} />
             <div style={{ display: 'flex', gap: '8px' }}>
               <button type="submit" style={{ flex: 1, background: '#2563EB', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>Join Band</button>
               <button type="button" onClick={() => setOnboardMode(null)} style={{ background: '#27272A', color: '#fff', border: 'none', padding: '8px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
@@ -842,16 +913,16 @@ export default function App() {
             onClick={() => setShowBandSwitcher(true)}
             style={{ background: 'none', border: 'none', color: '#fff', textAlign: 'left', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' }}
           >
-            <h1 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>{userBand.name.toUpperCase()}</h1>
+            <h1 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0, color: '#fff' }}>{userBand.name.toUpperCase()}</h1>
             <ChevronDown size={14} color="#3B82F6" />
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
-            <p style={{ fontSize: '11px', color: '#A1A1AA', margin: 0 }}>Code: <strong style={{ color: '#3B82F6' }}>{userBand.invite_code}</strong></p>
+            <p style={{ fontSize: '11px', color: '#A1A1AA', margin: 0 }}>Role: <span style={{ color: '#22C55E', textTransform: 'capitalize' }}>{userRole}</span> • Code: <strong style={{ color: '#3B82F6' }}>{userBand.invite_code}</strong></p>
             <button 
               onClick={() => handleEmailInvite(userBand.name, userBand.invite_code)} 
               style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '11px', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '2px', fontWeight: 'bold' }}
             >
-              <Mail size={12} /> Email Code
+              <Mail size={12} /> Email
             </button>
           </div>
         </div>
@@ -872,7 +943,7 @@ export default function App() {
             <button onClick={() => setShowBandSwitcher(false)} style={{ position: 'absolute', top: '12px', right: '12px', background: 'none', border: 'none', color: '#A1A1AA', cursor: 'pointer' }}>
               <X size={20} />
             </button>
-            <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0' }}>Switch Active Band</h3>
+            <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0', color: '#fff' }}>Switch Active Band</h3>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px', maxHeight: '200px', overflowY: 'auto' }}>
               {userBands.map(m => (
@@ -890,16 +961,18 @@ export default function App() {
                   }}
                 >
                   <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setUserBand(m.bands); setUserRole(m.role); setShowBandSwitcher(false); }}>
-                    <p style={{ fontWeight: 'bold', margin: '0 0 2px 0', fontSize: '13px' }}>{m.bands.name}</p>
-                    <p style={{ fontSize: '10px', color: '#A1A1AA', margin: 0 }}>Code: {m.bands.invite_code}</p>
+                    <p style={{ fontWeight: 'bold', margin: '0 0 2px 0', fontSize: '13px', color: '#fff' }}>{m.bands.name}</p>
+                    <p style={{ fontSize: '10px', color: '#A1A1AA', margin: 0 }}>{m.member_name} ({m.role})</p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <button onClick={() => handleEmailInvite(m.bands.name, m.bands.invite_code)} title="Email Invite" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer' }}>
                       <Mail size={13} />
                     </button>
-                    <button onClick={() => handleDeleteBand(m.band_id, m.bands.name)} title="Delete Band" style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer' }}>
-                      <Trash2 size={13} />
-                    </button>
+                    {m.role === 'admin' && (
+                      <button onClick={() => handleDeleteBand(m.band_id, m.bands.name)} title="Delete Band" style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '4px 6px', borderRadius: '4px', cursor: 'pointer' }}>
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                     {m.band_id === userBand.id ? (
                       <span style={{ fontSize: '11px', color: '#60A5FA', fontWeight: 'bold', marginLeft: '4px' }}>Active</span>
                     ) : (
@@ -935,7 +1008,7 @@ export default function App() {
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Live Booth POS</h2>
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Merch Sales Total: ${sessionTotalMerchRevenue.toFixed(2)} ({sessionSales.length} orders)</p>
               </div>
-              {sessionSales.length > 0 && userRole === 'admin' && (
+              {sessionSales.length > 0 && userRole !== 'merch' && (
                 <button onClick={() => setShowReconcileModal(true)} style={{ background: '#16A34A', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>
                   Reconcile Night
                 </button>
@@ -978,7 +1051,7 @@ export default function App() {
               </div>
             )}
 
-            {showReconcileModal && (
+            {showReconcileModal && userRole !== 'merch' && (
               <div style={{ background: '#18181B', border: '2px solid #22C55E', borderRadius: '8px', padding: '14px', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#22C55E' }}>Nightly Reconciliation Summary</h3>
                 
@@ -1112,14 +1185,14 @@ export default function App() {
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Merch Inventory</h2>
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Cloud synced inventory counts</p>
               </div>
-              {userRole === 'admin' && (
+              {userRole !== 'merch' && (
                 <button onClick={() => { setEditingMerchId(null); setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(!showAddMerch) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                   {showAddMerch ? 'Cancel' : '+ Add Item'}
                 </button>
               )}
             </div>
 
-            {showAddMerch && userRole === 'admin' && (
+            {showAddMerch && userRole !== 'merch' && (
               <form onSubmit={handleSaveMerchItem} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
                 <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 8px 0', color: '#3B82F6' }}>{editingMerchId ? 'Edit Merch Item' : 'Add New Merch Item'}</h3>
                 
@@ -1176,7 +1249,7 @@ export default function App() {
                       ${item.price} • Stock: {stock} {stock < 5 ? '⚠️ (CRITICAL LOW)' : stock <= 10 ? '⚠️ (LOW STOCK)' : ''}
                     </p>
                   </div>
-                  {userRole === 'admin' && (
+                  {userRole !== 'merch' && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <button onClick={() => {
                         setEditingMerchId(item.id)
@@ -1208,12 +1281,14 @@ export default function App() {
                 <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Band Calendar</h2>
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Shows, practices, and quorum votes</p>
               </div>
-              <button onClick={() => { setEditingEventId(null); setEventTitle(''); setEventLocation(''); setEventDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(!showAddEvent) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
-                {showAddEvent ? 'Cancel' : '+ Add Date'}
-              </button>
+              {userRole !== 'merch' && (
+                <button onClick={() => { setEditingEventId(null); setEventTitle(''); setEventLocation(''); setEventDate(''); setEventGuarantee(''); setEventNotes(''); setShowAddEvent(!showAddEvent) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                  {showAddEvent ? 'Cancel' : '+ Add Date'}
+                </button>
+              )}
             </div>
 
-            {showAddEvent && (
+            {showAddEvent && userRole !== 'merch' && (
               <form onSubmit={handleSaveEvent} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <select value={eventType} onChange={e => setEventType(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
@@ -1234,7 +1309,8 @@ export default function App() {
             )}
 
             {calendarEvents.map(ev => {
-              const isBandConfirmed = ev.votes.length >= 3
+              const totalMembers = bandMembersList.length
+              const isBandConfirmed = totalMembers > 0 && ev.votes.length >= totalMembers
               return (
                 <div key={ev.id} style={{ background: '#18181B', padding: '14px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '12px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
@@ -1249,35 +1325,42 @@ export default function App() {
                       {ev.type === 'Show' && (
                         <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#22C55E' }}>${ev.guarantee}</span>
                       )}
-                      <button onClick={() => { setEditingEventId(ev.id); setEventType(ev.type); setEventTitle(ev.title); setEventLocation(ev.location); setEventDate(ev.date); setEventGuarantee(ev.guarantee || ''); setEventNotes(ev.notes || ''); setShowAddEvent(true); }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Event">
-                        <Edit2 size={16} />
-                      </button>
-                      <button onClick={() => deleteEvent(ev.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Event">
-                        <Trash2 size={16} />
-                      </button>
+                      {userRole !== 'merch' && (
+                        <>
+                          <button onClick={() => { setEditingEventId(ev.id); setEventType(ev.type); setEventTitle(ev.title); setEventLocation(ev.location); setEventDate(ev.date); setEventGuarantee(ev.guarantee || ''); setEventNotes(ev.notes || ''); setShowAddEvent(true); }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Event">
+                            <Edit2 size={16} />
+                          </button>
+                          <button onClick={() => deleteEvent(ev.id)} style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: 0 }} title="Delete Event">
+                            <Trash2 size={16} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
 
-                  <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '6px', margin: '10px 0', border: '1px solid #27272A', fontSize: '12px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                      <span style={{ color: isBandConfirmed ? '#22C55E' : '#EAB308', fontWeight: 'bold' }}>
-                        {isBandConfirmed ? '✓ Band Confirmed (3+ Yes)' : `Band Quorum: ${ev.votes.length}/3 Yes votes`}
-                      </span>
-                      <button onClick={() => togglePromoterConfirm(ev.id)} style={{ background: ev.promoter_confirmed ? '#166534' : '#27272A', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>
-                        {ev.promoter_confirmed ? '✓ Promoter Confirmed' : 'Promoter Unconfirmed'}
-                      </button>
+                  {userRole !== 'merch' && (
+                    <div style={{ background: '#0F0F10', padding: '8px', borderRadius: '6px', margin: '10px 0', border: '1px solid #27272A', fontSize: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ color: isBandConfirmed ? '#22C55E' : '#EAB308', fontWeight: 'bold' }}>
+                          {isBandConfirmed ? `✓ Band Confirmed (${ev.votes.length}/${totalMembers} Yes)` : `Band Quorum: ${ev.votes.length}/${totalMembers} Yes votes needed`}
+                        </span>
+                        <button onClick={() => togglePromoterConfirm(ev.id)} style={{ background: ev.promoter_confirmed ? '#166534' : '#27272A', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                          {ev.promoter_confirmed ? '✓ Promoter Confirmed' : 'Promoter Unconfirmed'}
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {bandMembersList.map(member => {
+                          const mName = member.member_name || 'Member'
+                          const hasVoted = ev.votes.includes(mName)
+                          return (
+                            <button key={member.user_id} onClick={() => handleVote(ev.id, mName)} style={{ background: hasVoted ? '#16A34A' : '#27272A', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', flex: '1 1 40%' }}>
+                              {mName}: {hasVoted ? 'YES' : 'No'}
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      {['Guitar', 'Drums', 'Bass', 'Vocals'].map(member => {
-                        const hasVoted = ev.votes.includes(member)
-                        return (
-                          <button key={member} onClick={() => handleVote(ev.id, member)} style={{ background: hasVoted ? '#16A34A' : '#27272A', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', flex: 1 }}>
-                            {member}: {hasVoted ? 'YES' : 'No'}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
+                  )}
 
                   {ev.notes && (
                     <div style={{ fontSize: '12px', color: '#D4D4D8', background: '#121214', padding: '8px', borderRadius: '4px', borderLeft: '3px solid #3B82F6' }}>
@@ -1291,7 +1374,7 @@ export default function App() {
         )}
 
         {/* 4. SETLISTS TAB */}
-        {activeTab === 'setlists' && (
+        {activeTab === 'setlists' && userRole !== 'merch' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
@@ -1380,7 +1463,7 @@ export default function App() {
         )}
 
         {/* 5. TREASURY TAB */}
-        {activeTab === 'treasury' && (
+        {activeTab === 'treasury' && userRole !== 'merch' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Band Treasury</h2>
@@ -1457,6 +1540,53 @@ export default function App() {
             )}
           </div>
         )}
+
+        {/* 6. ADMIN TAB (Admin Only) */}
+        {activeTab === 'admin' && userRole === 'admin' && (
+          <div>
+            <h2 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>Band Administration</h2>
+            <p style={{ fontSize: '11px', color: '#A1A1AA', marginBottom: '14px' }}>Manage members, remove users, and assign permission levels</p>
+
+            <div style={{ background: '#18181B', padding: '14px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0 0 4px 0', color: '#3B82F6' }}>Band Invite Code</h3>
+              <p style={{ fontSize: '12px', color: '#D4D4D8', margin: '0 0 10px 0' }}>Share this code with bandmates so they can join:</p>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div style={{ background: '#0F0F10', padding: '8px 12px', borderRadius: '6px', fontSize: '16px', fontWeight: 'bold', letterSpacing: '2px', color: '#22C55E', border: '1px solid #27272A' }}>
+                  {userBand.invite_code}
+                </div>
+                <button onClick={() => handleEmailInvite(userBand.name, userBand.invite_code)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '10px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Mail size={14} /> Email Invite
+                </button>
+              </div>
+            </div>
+
+            <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>Band Members ({bandMembersList.length})</h3>
+            {bandMembersList.map(member => (
+              <div key={member.user_id} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <p style={{ fontWeight: 'bold', fontSize: '14px', margin: '0 0 2px 0', color: '#fff' }}>{member.member_name || 'Member'}</p>
+                  <p style={{ fontSize: '11px', color: '#A1A1AA', margin: 0, textTransform: 'capitalize' }}>Role: <span style={{ color: '#3B82F6', fontWeight: 'bold' }}>{member.role}</span></p>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <select 
+                    value={member.role} 
+                    onChange={(e) => handleUpdateMemberRole(member.user_id, e.target.value)}
+                    style={{ background: '#0F0F10', color: '#fff', border: '1px solid #27272A', borderRadius: '4px', padding: '4px 6px', fontSize: '11px' }}
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="member">Member</option>
+                    <option value="merch">Merch</option>
+                  </select>
+                  {member.user_id !== session.user.id && (
+                    <button onClick={() => handleRemoveMember(member.user_id, member.member_name)} style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }} title="Remove Member">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
 
       {/* Sticky Checkout Drawer */}
@@ -1492,13 +1622,22 @@ export default function App() {
         </div>
       )}
 
-      {/* Bottom Navigation */}
+      {/* Bottom Navigation (Role-Adaptive) */}
       <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: '480px', margin: '0 auto', background: '#18181B', borderTop: '1px solid #27272A', display: 'flex', justifyContent: 'space-around', padding: '10px 0', boxSizing: 'border-box' }}>
         <button onClick={() => setActiveTab('sales')} style={{ background: 'none', border: 'none', color: activeTab === 'sales' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><ShoppingCart size={18} /><span style={{ marginTop: '2px' }}>Sales</span></button>
         <button onClick={() => setActiveTab('inventory')} style={{ background: 'none', border: 'none', color: activeTab === 'inventory' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Package size={18} /><span style={{ marginTop: '2px' }}>Inventory</span></button>
         <button onClick={() => setActiveTab('calendar')} style={{ background: 'none', border: 'none', color: activeTab === 'calendar' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><CalendarIcon size={18} /><span style={{ marginTop: '2px' }}>Calendar</span></button>
-        <button onClick={() => setActiveTab('setlists')} style={{ background: 'none', border: 'none', color: activeTab === 'setlists' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Music size={18} /><span style={{ marginTop: '2px' }}>Setlists</span></button>
-        <button onClick={() => setActiveTab('treasury')} style={{ background: 'none', border: 'none', color: activeTab === 'treasury' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><DollarSign size={18} /><span style={{ marginTop: '2px' }}>Treasury</span></button>
+        
+        {userRole !== 'merch' && (
+          <>
+            <button onClick={() => setActiveTab('setlists')} style={{ background: 'none', border: 'none', color: activeTab === 'setlists' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Music size={18} /><span style={{ marginTop: '2px' }}>Setlists</span></button>
+            <button onClick={() => setActiveTab('treasury')} style={{ background: 'none', border: 'none', color: activeTab === 'treasury' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><DollarSign size={18} /><span style={{ marginTop: '2px' }}>Treasury</span></button>
+          </>
+        )}
+
+        {userRole === 'admin' && (
+          <button onClick={() => setActiveTab('admin')} style={{ background: 'none', border: 'none', color: activeTab === 'admin' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Shield size={18} /><span style={{ marginTop: '2px' }}>Admin</span></button>
+        )}
       </nav>
 
     </div>
