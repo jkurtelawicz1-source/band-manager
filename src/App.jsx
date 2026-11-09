@@ -80,6 +80,7 @@ export default function App() {
   const [editingMerchId, setEditingMerchId] = useState(null)
   const [newName, setNewName] = useState('')
   const [newPrice, setNewPrice] = useState('')
+  const [newMerchType, setNewMerchType] = useState('Shirts')
   const [hasMultipleSizes, setHasMultipleSizes] = useState(false)
   const [singleSizeName, setSingleSizeName] = useState('Standard')
   const [singleStock, setSingleStock] = useState('')
@@ -451,22 +452,12 @@ export default function App() {
 
     const updatedMerch = merch.map(m => {
       const soldCount = sessionItemTotals[m.id] || 0
-      
-      // If item has sizes matrix, decrement the specific sold size stock if tracked, 
-      // or fall back to overall stock deduction.
-      let newStock = Math.max(0, m.stock_count - soldCount)
-      let newMatrix = m.size_matrix ? { ...m.size_matrix } : null
-
-      if (newMatrix && soldCount > 0) {
-        // Distribute sold count across cart items or deduct roughly
-        // For simplicity during reconciliation, we reduce overall stock count correctly.
-      }
-
+      const newStock = Math.max(0, m.stock_count - soldCount)
       return { ...m, stock_count: newStock }
     })
 
     for (const m of updatedMerch) {
-      const { error } = await supabase.from('merch').update({ stock_count: m.stock_count, size_matrix: m.size_matrix }).eq('id', m.id)
+      const { error } = await supabase.from('merch').update({ stock_count: m.stock_count, size_matrix: m.size_matrix, merch_type: m.merch_type }).eq('id', m.id)
       if (error) {
         alert('Stock Reconciliation Update Failed: ' + error.message)
         return
@@ -521,6 +512,7 @@ export default function App() {
     if (editingMerchId) {
       const updatedItem = {
         item_name: newName,
+        merch_type: newMerchType,
         size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'),
         price: parseFloat(newPrice) || 0,
         stock_count: totalCalculatedStock,
@@ -541,6 +533,7 @@ export default function App() {
         id: String(Date.now()), 
         band_id: userBand.id,
         item_name: newName, 
+        merch_type: newMerchType,
         size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
         price: parseFloat(newPrice) || 0, 
         stock_count: totalCalculatedStock,
@@ -557,7 +550,7 @@ export default function App() {
       setMerch([newItem, ...merch])
     }
 
-    setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
+    setNewName(''); setNewPrice(''); setNewMerchType('Shirts'); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(false)
   }
 
   async function deleteMerch(id) {
@@ -1284,67 +1277,100 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '20px' }}>
-              {merch.map(item => {
-                const soldQty = sessionItemTotals[item.id] || 0
-                const isSoldOut = item.stock_count <= 0
-                const isFlashing = flashCardId === item.id
+            {/* Organized Sales POS Categorized Sections */}
+            {(() => {
+              if (merch.length === 0) {
+                return <p style={{ fontSize: '12px', color: '#71717A' }}>No merch items available in inventory.</p>
+              }
 
-                return (
-                  <div 
-                    key={item.id}
-                    style={{
-                      background: isSoldOut ? '#121214' : '#18181B',
-                      border: isFlashing ? '2px solid #22C55E' : '1px solid #27272A',
-                      borderRadius: '8px',
-                      padding: '12px',
-                      opacity: isSoldOut ? 0.5 : 1,
-                      position: 'relative',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between'
-                    }}
-                  >
-                    {soldQty > 0 && (
-                      <div style={{ position: 'absolute', top: '8px', right: '8px', background: '#2563EB', color: '#fff', fontSize: '10px', fontWeight: 'bold', padding: '2px 6px', borderRadius: '4px' }}>
-                        Sold: {soldQty}
-                      </div>
-                    )}
-                    <div>
-                      <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{item.item_name}</h3>
-                      <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 8px 0' }}>{item.has_sizes ? 'Sizes: S - 3XL' : item.size}</p>
-                    </div>
+              // Group items by merch_type (fallback to 'Other' if not set)
+              const typeGroups = {}
+              merch.forEach(item => {
+                const t = item.merch_type || 'Other'
+                if (!typeGroups[t]) typeGroups[t] = []
+                typeGroups[t].push(item)
+              })
 
-                    <div>
-                      {item.has_sizes && (
-                        <select 
-                          value={selectedSizes[item.id] || 'L'} 
-                          onChange={(e) => setSelectedSizes({...selectedSizes, [item.id]: e.target.value})}
-                          style={{ width: '100%', padding: '4px', background: '#0F0F10', border: '1px solid #27272A', borderRadius: '4px', color: '#fff', fontSize: '11px', marginBottom: '8px' }}
-                        >
-                          {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(sz => <option key={sz} value={sz}>Size: {sz}</option>)}
-                        </select>
-                      )}
+              const categoryOrder = ['Shirts', 'Hoodies', 'Hats', 'CD', 'Patches', 'Stickers', 'Other']
+              const activeCategories = categoryOrder.filter(cat => typeGroups[cat] && typeGroups[cat].length > 0)
+              
+              // Include any custom categories not in default order list
+              Object.keys(typeGroups).forEach(cat => {
+                if (!activeCategories.includes(cat)) activeCategories.push(cat)
+              })
 
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#22C55E' }}>${item.price}</span>
-                        <span style={{ fontSize: '10px', color: '#71717A' }}>Stock: {item.stock_count}</span>
-                      </div>
-
-                      <button 
-                        disabled={isSoldOut}
-                        onClick={() => handleAddToCart(item)}
-                        style={{ width: '100%', background: isSoldOut ? '#27272A' : '#2563EB', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', cursor: isSoldOut ? 'not-allowed' : 'pointer' }}
-                      >
-                        + Add to Cart
-                      </button>
-                    </div>
+              return activeCategories.map(catName => (
+                <div key={catName} style={{ marginBottom: '18px' }}>
+                  <div style={{ borderBottom: '1px solid #27272A', paddingBottom: '4px', marginBottom: '10px' }}>
+                    <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#3B82F6', margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      {catName}
+                    </h3>
                   </div>
-                )
-              })}
-            </div>
 
-            <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>Today's Session Sales Ledger</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    {typeGroups[catName].map(item => {
+                      const soldQty = sessionItemTotals[item.id] || 0
+                      const isSoldOut = item.stock_count <= 0
+                      const isFlashing = flashCardId === item.id
+
+                      return (
+                        <div 
+                          key={item.id}
+                          style={{
+                            background: isSoldOut ? '#121214' : '#18181B',
+                            border: isFlashing ? '2px solid #22C55E' : '1px solid #27272A',
+                            borderRadius: '8px',
+                            padding: '12px',
+                            opacity: isSoldOut ? 0.5 : 1,
+                            position: 'relative',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between'
+                          }}
+                        >
+                          {soldQty > 0 && (
+                            <div style={{ position: 'absolute', top: '8px', right: '8px', background: '#2563EB', color: '#fff', fontSize: '10px', fontWeight: 'bold', padding: '2px 6px', borderRadius: '4px' }}>
+                              Sold: {soldQty}
+                            </div>
+                          )}
+                          <div>
+                            <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{item.item_name}</h3>
+                            <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '0 0 8px 0' }}>{item.has_sizes ? 'Sizes: S - 3XL' : item.size}</p>
+                          </div>
+
+                          <div>
+                            {item.has_sizes && (
+                              <select 
+                                value={selectedSizes[item.id] || 'L'} 
+                                onChange={(e) => setSelectedSizes({...selectedSizes, [item.id]: e.target.value})}
+                                style={{ width: '100%', padding: '4px', background: '#0F0F10', border: '1px solid #27272A', borderRadius: '4px', color: '#fff', fontSize: '11px', marginBottom: '8px' }}
+                              >
+                                {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(sz => <option key={sz} value={sz}>Size: {sz}</option>)}
+                              </select>
+                            )}
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                              <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#22C55E' }}>${item.price}</span>
+                              <span style={{ fontSize: '10px', color: '#71717A' }}>Stock: {item.stock_count}</span>
+                            </div>
+
+                            <button 
+                              disabled={isSoldOut}
+                              onClick={() => handleAddToCart(item)}
+                              style={{ width: '100%', background: isSoldOut ? '#27272A' : '#2563EB', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', cursor: isSoldOut ? 'not-allowed' : 'pointer' }}
+                            >
+                              + Add to Cart
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))
+            })()}
+
+            <h3 style={{ fontSize: '14px', fontWeight: '600', margin: '16px 0 8px 0' }}>Today's Session Sales Ledger</h3>
             {sessionSales.length === 0 ? (
               <p style={{ fontSize: '12px', color: '#71717A' }}>No sales recorded yet today.</p>
             ) : (
@@ -1370,7 +1396,7 @@ export default function App() {
                 <p style={{ fontSize: '11px', color: '#A1A1AA', margin: '2px 0 0 0' }}>Cloud synced inventory counts</p>
               </div>
               {userRole !== 'merch' && (
-                <button onClick={() => { setEditingMerchId(null); setNewName(''); setNewPrice(''); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(!showAddMerch) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                <button onClick={() => { setEditingMerchId(null); setNewName(''); setNewPrice(''); setNewMerchType('Shirts'); setHasMultipleSizes(false); setSingleStock(''); setShowAddMerch(!showAddMerch) }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
                   {showAddMerch ? 'Cancel' : '+ Add Item'}
                 </button>
               )}
@@ -1382,7 +1408,24 @@ export default function App() {
                 
                 <input type="text" placeholder="Item Name (e.g. Tour Hoodie)" value={newName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
                 
-                <input type="number" step="0.01" placeholder="Price $" value={newPrice} onChange={e => setNewPrice(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: '11px', color: '#A1A1AA', display: 'block', marginBottom: '2px' }}>Merch Type</label>
+                    <select value={newMerchType} onChange={e => setNewMerchType(e.target.value)} style={inputStyle}>
+                      <option value="Hats">Hats</option>
+                      <option value="Shirts">Shirts</option>
+                      <option value="Hoodies">Hoodies</option>
+                      <option value="CD">CD</option>
+                      <option value="Patches">Patches</option>
+                      <option value="Stickers">Stickers</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: '11px', color: '#A1A1AA', display: 'block', marginBottom: '2px' }}>Price ($)</label>
+                    <input type="number" step="0.01" placeholder="25.00" value={newPrice} onChange={e => setNewPrice(e.target.value)} required style={inputStyle} />
+                  </div>
+                </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', background: '#121214', padding: '8px', borderRadius: '4px', border: '1px solid #27272A' }}>
                   <input type="checkbox" id="multiSize" checked={hasMultipleSizes} onChange={e => setHasMultipleSizes(e.target.checked)} style={{ width: '16px', height: '16px', accentColor: '#2563EB', cursor: 'pointer' }} />
@@ -1391,7 +1434,7 @@ export default function App() {
 
                 {!hasMultipleSizes ? (
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                    <input type="text" placeholder="Size (e.g. Standard)" value={singleSizeName} onChange={e => setSingleSizeName(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+                    <input type="text" placeholder="Size / Variant (e.g. Standard)" value={singleSizeName} onChange={e => setSingleSizeName(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
                     <input type="number" placeholder="Initial Stock" value={singleStock} onChange={e => setSingleStock(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
                   </div>
                 ) : (
@@ -1422,7 +1465,6 @@ export default function App() {
             {merch.map(item => {
               const stock = item.stock_count
               
-              // Check if any specific size in the size_matrix is lower than 5
               let lowSizesList = []
               if (item.has_sizes && item.size_matrix) {
                 lowSizesList = Object.entries(item.size_matrix)
@@ -1440,9 +1482,14 @@ export default function App() {
               return (
                 <div key={item.id} style={{ background: alertBg, padding: '12px 14px', borderRadius: '8px', border: `1px solid ${alertBorder}`, marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>
-                      {item.item_name} <span style={{ color: '#A1A1AA', fontSize: '12px' }}>({item.has_sizes ? 'S - 3XL' : item.size})</span>
-                    </h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                      <span style={{ fontSize: '10px', background: '#2563EB', color: '#fff', padding: '1px 6px', borderRadius: '3px', fontWeight: 'bold' }}>
+                        {(item.merch_type || 'Other').toUpperCase()}
+                      </span>
+                      <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>
+                        {item.item_name} <span style={{ color: '#A1A1AA', fontSize: '12px' }}>({item.has_sizes ? 'S - 3XL' : item.size})</span>
+                      </h3>
+                    </div>
                     <p style={{ fontSize: '12px', color: stockColor, fontWeight: '600', margin: '2px 0 0 0' }}>
                       ${item.price} • Total Stock: {stock} 
                       {stock < 5 ? ' ⚠️ (CRITICAL LOW)' : stock <= 10 ? ' ⚠️ (LOW STOCK)' : ''}
@@ -1460,6 +1507,7 @@ export default function App() {
                         setEditingMerchId(item.id)
                         setNewName(item.item_name)
                         setNewPrice(item.price)
+                        setNewMerchType(item.merch_type || 'Shirts')
                         setHasMultipleSizes(item.has_sizes || false)
                         if (item.has_sizes && item.size_matrix) {
                           setSizeStockMatrix(item.size_matrix)
@@ -1538,7 +1586,7 @@ export default function App() {
                   } else if (conflicts.showPracticeConflict) {
                     return (
                       <div style={{ background: '#422006', border: '1px solid #EAB308', color: '#FACC15', padding: '8px', borderRadius: '4px', fontSize: '11px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <AlertTriangle size={14} color="#FACC15" />
+                        <AlertTriangle size={14} color="#EAB308" />
                         <strong>Date Interference:</strong> Selected date overlaps with another Show or Practice!
                       </div>
                     )
@@ -1945,7 +1993,7 @@ export default function App() {
       <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: '480px', margin: '0 auto', background: '#18181B', borderTop: '1px solid #27272A', display: 'flex', justifyContent: 'space-around', padding: '10px 0', boxSizing: 'border-box' }}>
         <button onClick={() => setActiveTab('sales')} style={{ background: 'none', border: 'none', color: activeTab === 'sales' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><ShoppingCart size={18} /><span style={{ marginTop: '2px' }}>Sales</span></button>
         <button onClick={() => setActiveTab('inventory')} style={{ background: 'none', border: 'none', color: activeTab === 'inventory' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Package size={18} /><span style={{ marginTop: '2px' }}>Inventory</span></button>
-        <button onClick={() => setActiveTab('calendar')} style={{ background: 'none', border: 'none', color: activeTab === 'calendar' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><CalendarIcon size={18} /><span style={{ marginTop: '2px' }}>Calendar</span></button>
+        <button onClick={() => setActiveTab('calendar')} style={{ background: 'none', border: 'none', color: activeTab === 'calendar' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><CalendarIcon size={18} /><span style={{ marginTop: '2px' }}>Data</span></button>
         
         {userRole !== 'merch' && (
           <>
