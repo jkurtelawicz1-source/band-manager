@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './supabaseClient'
 import { Music, Package, DollarSign, Calendar as CalendarIcon, Trash2, ShoppingCart, Edit2, RefreshCw, ArrowUp, ArrowDown, X, LogOut, Users, PlusCircle, ChevronDown, Mail, Shield, Check, Download, AlertTriangle } from 'lucide-react'
 
@@ -10,12 +10,18 @@ export default function App() {
   const [bandMembersList, setBandMembersList] = useState([])
   const [loadingAuth, setLoadingAuth] = useState(true)
 
+  const userBandRef = useRef(null)
+  userBandRef.current = userBand
+
+  const isResettingPasswordRef = useRef(false)
+
   // Auth Form State
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
   const [isForgotPassword, setIsForgotPassword] = useState(false)
   const [isResettingPassword, setIsResettingPassword] = useState(false)
+  isResettingPasswordRef.current = isResettingPassword
   const [newPasswordInput, setNewPasswordInput] = useState('')
   const [authError, setAuthError] = useState(null)
   const [authSuccessMsg, setAuthSuccessMsg] = useState(null)
@@ -32,7 +38,7 @@ export default function App() {
   // Dynamic Tabs based on permissions
   const [activeTab, setActiveTab] = useState('sales')
   const [syncing, setSyncing] = useState(false)
-  
+
   const [merch, setMerch] = useState([])
   const [sessionSales, setSessionSales] = useState([])
   const [calendarEvents, setCalendarEvents] = useState([])
@@ -92,48 +98,35 @@ export default function App() {
   const [editingMemberUserId, setEditingMemberUserId] = useState(null)
   const [editMemberNameVal, setEditMemberNameVal] = useState('')
 
-  // 1. Check Auth & Listen for Password Reset Event
-  useEffect(() => {
-    let mounted = true
+  const clearBandDataState = useCallback(() => {
+    setBandMembersList([])
+    setMerch([])
+    setSessionSales([])
+    setCalendarEvents([])
+    setSetlists([])
+    setTreasury([])
+    setCart([])
+    setSelectedSizes({})
+    setShowReconcileModal(false)
+    setShowAddEvent(false)
+    setEditingEventId(null)
+    setShowAddSetlist(false)
+    setEditingSetlistId(null)
+    setShowTxModal(false)
+    setShowAddMerch(false)
+    setEditingMerchId(null)
+    setEditingMemberUserId(null)
+  }, [])
 
-    async function initAuth() {
-      const { data: { session: currentSession } } = await supabase.auth.getSession()
-      if (!mounted) return
+  const handleSelectBand = useCallback((nextBand, nextRole = 'member') => {
+    if (!nextBand) return
+    clearBandDataState()
+    setUserBand(nextBand)
+    setUserRole(nextRole || 'member')
+    setShowBandSwitcher(false)
+  }, [clearBandDataState])
 
-      setSession(currentSession)
-      if (currentSession) {
-        await fetchUserBands(currentSession.user.id)
-      } else {
-        setLoadingAuth(false)
-      }
-    }
-
-    initAuth()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!mounted) return
-
-      if (event === 'PASSWORD_RECOVERY') {
-        setIsResettingPassword(true)
-      }
-
-      setSession(session)
-      if (session && !isResettingPassword) {
-        await fetchUserBands(session.user.id)
-      } else if (!session) {
-        setUserBands([])
-        setUserBand(null)
-        setLoadingAuth(false)
-      }
-    })
-
-    return () => {
-      mounted = false
-      subscription.unsubscribe()
-    }
-  }, [isResettingPassword])
-
-  async function fetchUserBands(userId) {
+  const fetchUserBands = useCallback(async (userId, preferredBandId = null) => {
     setLoadingAuth(true)
     try {
       const { data: memberships, error: memError } = await supabase
@@ -144,11 +137,12 @@ export default function App() {
       if (memError || !memberships || memberships.length === 0) {
         setUserBands([])
         setUserBand(null)
-        setLoadingAuth(false)
+        setUserRole('member')
+        clearBandDataState()
         return
       }
 
-      const bandIds = memberships.map(m => m.band_id)
+      const bandIds = [...new Set(memberships.map(m => m.band_id))]
       const { data: bandsData, error: bandError } = await supabase
         .from('bands')
         .select('id, name, invite_code')
@@ -157,82 +151,141 @@ export default function App() {
       if (bandError || !bandsData) {
         setUserBands([])
         setUserBand(null)
-        setLoadingAuth(false)
+        setUserRole('member')
+        clearBandDataState()
         return
       }
 
-      const validMemberships = memberships.map(m => {
-        const matchingBand = bandsData.find(b => b.id === m.band_id)
-        return {
+      const bandsById = new Map(bandsData.map(b => [b.id, b]))
+      const validMemberships = memberships
+        .map(m => ({
           band_id: m.band_id,
           role: m.role || 'member',
           member_name: m.member_name || 'Member',
-          bands: matchingBand
-        }
-      }).filter(m => m.bands)
+          bands: bandsById.get(m.band_id) || null
+        }))
+        .filter(m => m.bands)
 
       setUserBands(validMemberships)
 
-      if (validMemberships.length > 0) {
-        setUserBand(prev => {
-          if (!prev) return validMemberships[0].bands
-          const exists = validMemberships.find(m => m.band_id === prev.id)
-          return exists ? exists.bands : validMemberships[0].bands
-        })
-        const activeMembership = validMemberships.find(m => m.band_id === (userBand?.id || validMemberships[0].band_id))
-        setUserRole(activeMembership ? activeMembership.role : 'member')
-      } else {
+      if (validMemberships.length === 0) {
         setUserBand(null)
+        setUserRole('member')
+        clearBandDataState()
+        return
       }
+
+      const targetBandId = preferredBandId || userBandRef.current?.id
+      const activeMembership =
+        validMemberships.find(m => m.band_id === targetBandId) || validMemberships[0]
+
+      setUserBand(activeMembership.bands)
+      setUserRole(activeMembership.role)
     } catch (err) {
       console.error('Catch error fetching band memberships:', err)
       setUserBands([])
       setUserBand(null)
+      setUserRole('member')
+      clearBandDataState()
     } finally {
       setLoadingAuth(false)
     }
-  }
+  }, [clearBandDataState])
 
-  // 2. Fetch all data for current active band
-  async function loadData() {
-    if (!userBand) return
+  // 2. Fetch all data strictly for current active band
+  const loadData = useCallback(async (bandId) => {
+    if (!bandId) {
+      clearBandDataState()
+      return
+    }
     setSyncing(true)
+    clearBandDataState()
     try {
-      const bId = userBand.id
+      const [
+        { data: members },
+        { data: m },
+        { data: s },
+        { data: c },
+        { data: sl },
+        { data: t },
+      ] = await Promise.all([
+        supabase.from('band_members').select('*').eq('band_id', bandId),
+        supabase.from('merch').select('*').eq('band_id', bandId),
+        supabase.from('session_sales').select('*').eq('band_id', bandId),
+        supabase.from('calendar_events').select('*').eq('band_id', bandId),
+        supabase.from('setlists').select('*').eq('band_id', bandId),
+        supabase.from('treasury').select('*').eq('band_id', bandId),
+      ])
 
-      const { data: members } = await supabase.from('band_members').select('*').eq('band_id', bId)
-      if (members) setBandMembersList(members)
+      const matchesActiveBand = row => String(row.band_id) === String(bandId)
 
-      const currentMembership = userBands.find(m => m.band_id === bId)
+      setBandMembersList((members || []).filter(matchesActiveBand))
+
+      const currentMembership = userBands.find(m => String(m.band_id) === String(bandId))
       if (currentMembership) {
         setUserRole(currentMembership.role)
       }
 
-      const { data: m } = await supabase.from('merch').select('*').eq('band_id', bId)
-      if (m) setMerch(m)
-
-      const { data: s } = await supabase.from('session_sales').select('*').eq('band_id', bId)
-      if (s) setSessionSales(s)
-
-      const { data: c } = await supabase.from('calendar_events').select('*').eq('band_id', bId)
-      if (c) setCalendarEvents(c)
-
-      const { data: sl } = await supabase.from('setlists').select('*').eq('band_id', bId)
-      if (sl) setSetlists(sl)
-
-      const { data: t } = await supabase.from('treasury').select('*').eq('band_id', bId)
-      if (t) setTreasury(t)
+      setMerch((m || []).filter(matchesActiveBand))
+      setSessionSales((s || []).filter(matchesActiveBand))
+      setCalendarEvents((c || []).filter(matchesActiveBand))
+      setSetlists((sl || []).filter(matchesActiveBand))
+      setTreasury((t || []).filter(matchesActiveBand))
     } catch (err) {
       console.error('Supabase Connection Catch:', err)
+      clearBandDataState()
     }
     setSyncing(false)
-  }
+  }, [clearBandDataState, userBands])
+
+  // 1. Check Auth & Listen for Password Reset Event
+  useEffect(() => {
+    let mounted = true
+
+    async function initAuth() {
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
+      if (!mounted) return
+
+      setSession(currentSession)
+      if (currentSession?.user?.id) {
+        await fetchUserBands(currentSession.user.id)
+      } else {
+        setLoadingAuth(false)
+      }
+    }
+
+    initAuth()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
+      if (!mounted) return
+
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsResettingPassword(true)
+      }
+
+      setSession(nextSession)
+      if (nextSession?.user?.id && !isResettingPasswordRef.current) {
+        await fetchUserBands(nextSession.user.id)
+      } else if (!nextSession) {
+        setUserBands([])
+        setUserBand(null)
+        setUserRole('member')
+        clearBandDataState()
+        setLoadingAuth(false)
+      }
+    })
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [fetchUserBands, clearBandDataState])
 
   useEffect(() => {
-    if (userBand) {
-      loadData()
+    if (userBand?.id) {
+      loadData(userBand.id)
     }
-  }, [userBand, userBands])
+  }, [userBand?.id, loadData])
 
   // Auth Handlers
   async function handleAuth(e) {
@@ -283,12 +336,12 @@ export default function App() {
   // Onboarding Handlers
   async function handleCreateBand(e) {
     e.preventDefault()
-    if (!newBandName.trim() || !memberNameInput.trim()) return
+    if (!newBandName.trim() || !memberNameInput.trim() || !session?.user?.id) return
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase()
-    
+
     const { data: bandData, error: bandError } = await supabase
       .from('bands')
-      .insert([{ name: newBandName, invite_code: inviteCode }])
+      .insert([{ name: newBandName.trim(), invite_code: inviteCode }])
       .select()
       .single()
 
@@ -306,7 +359,8 @@ export default function App() {
       return
     }
 
-    await fetchUserBands(session.user.id)
+    clearBandDataState()
+    await fetchUserBands(session.user.id, bandData.id)
     setUserBand(bandData)
     setUserRole('admin')
     setOnboardMode(null)
@@ -316,7 +370,7 @@ export default function App() {
 
   async function handleJoinBand(e) {
     e.preventDefault()
-    if (!joinInviteCode.trim() || !memberNameInput.trim()) return
+    if (!joinInviteCode.trim() || !memberNameInput.trim() || !session?.user?.id) return
 
     const { data: bandData, error: bandError } = await supabase
       .from('bands')
@@ -338,7 +392,8 @@ export default function App() {
       return
     }
 
-    await fetchUserBands(session.user.id)
+    clearBandDataState()
+    await fetchUserBands(session.user.id, bandData.id)
     setUserBand(bandData)
     setUserRole('member')
     setOnboardMode(null)
@@ -362,10 +417,13 @@ export default function App() {
       return
     }
 
-    if (userBand && userBand.id === bandId) {
+    if (userBand?.id === bandId) {
       setUserBand(null)
+      clearBandDataState()
     }
-    await fetchUserBands(session.user.id)
+    if (session?.user?.id) {
+      await fetchUserBands(session.user.id)
+    }
   }
 
   function handleEmailInvite(bandName, inviteCode) {
@@ -388,7 +446,7 @@ export default function App() {
   function handleAddToCart(item) {
     if (item.stock_count <= 0) return
     const chosenSize = item.has_sizes ? (selectedSizes[item.id] || 'L') : item.size
-    
+
     setFlashCardId(item.id)
     setTimeout(() => setFlashCardId(null), 250)
 
@@ -408,7 +466,7 @@ export default function App() {
   }
 
   async function handleCheckout(paymentType) {
-    if (cart.length === 0) return
+    if (cart.length === 0 || !userBand?.id) return
     const saleRecord = {
       id: String(Date.now()),
       band_id: userBand.id,
@@ -417,7 +475,7 @@ export default function App() {
       items: [...cart],
       total: cart.reduce((sum, i) => sum + (i.price * i.qty), 0)
     }
-    
+
     const { error } = await supabase.from('session_sales').insert([saleRecord])
     if (error) {
       alert('Checkout Insert Failed: ' + error.message)
@@ -449,6 +507,7 @@ export default function App() {
       alert('Merch permission level cannot reconcile sales.')
       return
     }
+    if (!userBand?.id) return
 
     const updatedMerch = merch.map(m => {
       const soldCount = sessionItemTotals[m.id] || 0
@@ -457,7 +516,11 @@ export default function App() {
     })
 
     for (const m of updatedMerch) {
-      const { error } = await supabase.from('merch').update({ stock_count: m.stock_count, size_matrix: m.size_matrix, merch_type: m.merch_type }).eq('id', m.id)
+      const { error } = await supabase
+        .from('merch')
+        .update({ stock_count: m.stock_count, size_matrix: m.size_matrix, merch_type: m.merch_type })
+        .eq('id', m.id)
+        .eq('band_id', userBand.id)
       if (error) {
         alert('Stock Reconciliation Update Failed: ' + error.message)
         return
@@ -501,9 +564,9 @@ export default function App() {
   // Inventory Handlers
   async function handleSaveMerchItem(e) {
     e.preventDefault()
-    if (!newName || !newPrice) return
-    
-    const totalCalculatedStock = hasMultipleSizes 
+    if (!newName || !newPrice || !userBand?.id) return
+
+    const totalCalculatedStock = hasMultipleSizes
       ? Object.values(sizeStockMatrix).reduce((a, b) => a + Number(b), 0)
       : (parseInt(singleStock) || 0)
 
@@ -520,7 +583,11 @@ export default function App() {
         size_matrix: matrixToSave
       }
 
-      const { error } = await supabase.from('merch').update(updatedItem).eq('id', editingMerchId)
+      const { error } = await supabase
+        .from('merch')
+        .update(updatedItem)
+        .eq('id', editingMerchId)
+        .eq('band_id', userBand.id)
       if (error) {
         alert('Merch Update Failed: ' + error.message)
         return
@@ -529,13 +596,13 @@ export default function App() {
       setMerch(merch.map(m => m.id === editingMerchId ? { ...m, ...updatedItem } : m))
       setEditingMerchId(null)
     } else {
-      const newItem = { 
-        id: String(Date.now()), 
+      const newItem = {
+        id: String(Date.now()),
         band_id: userBand.id,
-        item_name: newName, 
+        item_name: newName,
         merch_type: newMerchType,
-        size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'), 
-        price: parseFloat(newPrice) || 0, 
+        size: hasMultipleSizes ? 'Assorted Sizes' : (singleSizeName || 'Standard'),
+        price: parseFloat(newPrice) || 0,
         stock_count: totalCalculatedStock,
         has_sizes: hasMultipleSizes,
         size_matrix: matrixToSave
@@ -554,7 +621,8 @@ export default function App() {
   }
 
   async function deleteMerch(id) {
-    const { error } = await supabase.from('merch').delete().eq('id', id)
+    if (!userBand?.id) return
+    const { error } = await supabase.from('merch').delete().eq('id', id).eq('band_id', userBand.id)
     if (error) {
       alert('Merch Delete Failed: ' + error.message)
       return
@@ -595,7 +663,7 @@ export default function App() {
   // Calendar Handlers
   async function handleSaveEvent(e) {
     e.preventDefault()
-    if (!eventTitle || !eventDate) return
+    if (!eventTitle || !eventDate || !userBand?.id) return
 
     const actualEndDate = eventType === 'Blackout' ? (eventEndDate || eventDate) : eventDate
 
@@ -610,7 +678,11 @@ export default function App() {
         notes: eventNotes || ''
       }
 
-      const { error } = await supabase.from('calendar_events').update(updatedEvent).eq('id', editingEventId)
+      const { error } = await supabase
+        .from('calendar_events')
+        .update(updatedEvent)
+        .eq('id', editingEventId)
+        .eq('band_id', userBand.id)
       if (error) {
         alert('Event Update Failed: ' + error.message)
         return
@@ -646,14 +718,18 @@ export default function App() {
   }
 
   async function handleVote(eventId, memberName) {
-    if (userRole === 'merch') return
+    if (userRole === 'merch' || !userBand?.id) return
 
     const target = calendarEvents.find(ev => ev.id === eventId)
     if (!target) return
     const hasVoted = target.votes.includes(memberName)
     const newVotes = hasVoted ? target.votes.filter(v => v !== memberName) : [...target.votes, memberName]
 
-    const { error } = await supabase.from('calendar_events').update({ votes: newVotes }).eq('id', eventId)
+    const { error } = await supabase
+      .from('calendar_events')
+      .update({ votes: newVotes })
+      .eq('id', eventId)
+      .eq('band_id', userBand.id)
     if (error) {
       alert('Vote Update Failed: ' + error.message)
       return
@@ -663,11 +739,16 @@ export default function App() {
   }
 
   async function togglePromoterConfirm(eventId) {
+    if (!userBand?.id) return
     const target = calendarEvents.find(ev => ev.id === eventId)
     if (!target) return
     const newStatus = !target.promoter_confirmed
 
-    const { error } = await supabase.from('calendar_events').update({ promoter_confirmed: newStatus }).eq('id', eventId)
+    const { error } = await supabase
+      .from('calendar_events')
+      .update({ promoter_confirmed: newStatus })
+      .eq('id', eventId)
+      .eq('band_id', userBand.id)
     if (error) {
       alert('Promoter Confirm Update Failed: ' + error.message)
       return
@@ -677,7 +758,8 @@ export default function App() {
   }
 
   async function deleteEvent(id) {
-    const { error } = await supabase.from('calendar_events').delete().eq('id', id)
+    if (!userBand?.id) return
+    const { error } = await supabase.from('calendar_events').delete().eq('id', id).eq('band_id', userBand.id)
     if (error) {
       alert('Event Delete Failed: ' + error.message)
       return
@@ -708,7 +790,7 @@ export default function App() {
 
   async function handleSaveSetlist(e) {
     e.preventDefault()
-    if (!setTitle) return
+    if (!setTitle || !userBand?.id) return
 
     if (editingSetlistId) {
       const updatedSet = {
@@ -719,7 +801,11 @@ export default function App() {
         songs: currentSongs.length > 0 ? currentSongs : ['Default Jam']
       }
 
-      const { error } = await supabase.from('setlists').update(updatedSet).eq('id', editingSetlistId)
+      const { error } = await supabase
+        .from('setlists')
+        .update(updatedSet)
+        .eq('id', editingSetlistId)
+        .eq('band_id', userBand.id)
       if (error) {
         alert('Setlist Update Failed: ' + error.message)
         return
@@ -751,7 +837,8 @@ export default function App() {
   }
 
   async function deleteSetlist(id) {
-    const { error } = await supabase.from('setlists').delete().eq('id', id)
+    if (!userBand?.id) return
+    const { error } = await supabase.from('setlists').delete().eq('id', id).eq('band_id', userBand.id)
     if (error) {
       alert('Setlist Delete Failed: ' + error.message)
       return
@@ -762,7 +849,7 @@ export default function App() {
   // Treasury Handlers & CSV Export
   async function handleAddTransaction(e) {
     e.preventDefault()
-    if (!txDesc || !txAmount) return
+    if (!txDesc || !txAmount || !userBand?.id) return
     const rawVal = parseFloat(txAmount) || 0
     const finalAmount = txType === 'expense' ? -Math.abs(rawVal) : Math.abs(rawVal)
     const newTx = {
@@ -789,9 +876,10 @@ export default function App() {
       alert('Band Members and Merch permissions cannot delete transactions from the treasury.')
       return
     }
+    if (!userBand?.id) return
     if (!window.confirm('Are you sure you want to delete this transaction line item?')) return
 
-    const { error } = await supabase.from('treasury').delete().eq('id', id)
+    const { error } = await supabase.from('treasury').delete().eq('id', id).eq('band_id', userBand.id)
     if (error) {
       alert('Transaction Delete Failed: ' + error.message)
       return
@@ -812,7 +900,7 @@ export default function App() {
       const expense = amt < 0 ? Math.abs(amt).toFixed(2) : '0.00'
       const sanitizedDesc = `"${(tx.description || '').replace(/"/g, '""')}"`
       const sanitizedCat = `"${(tx.category || '').replace(/"/g, '""')}"`
-      
+
       return [
         tx.id,
         sanitizedDesc,
@@ -837,7 +925,7 @@ export default function App() {
 
   // Admin Tab Member Management Handlers
   async function handleUpdateMemberRole(memberUserId, newRole) {
-    if (userRole !== 'admin') return
+    if (userRole !== 'admin' || !userBand?.id) return
     const { error } = await supabase
       .from('band_members')
       .update({ role: newRole })
@@ -848,11 +936,11 @@ export default function App() {
       alert('Failed to update role: ' + error.message)
       return
     }
-    loadData()
+    await loadData(userBand.id)
   }
 
   async function handleSaveMemberNameAdmin(memberUserId) {
-    if (userRole !== 'admin' || !editMemberNameVal.trim()) return
+    if (userRole !== 'admin' || !editMemberNameVal.trim() || !userBand?.id) return
     const { error } = await supabase
       .from('band_members')
       .update({ member_name: editMemberNameVal.trim() })
@@ -865,11 +953,11 @@ export default function App() {
     }
     setEditingMemberUserId(null)
     setEditMemberNameVal('')
-    loadData()
+    await loadData(userBand.id)
   }
 
   async function handleRemoveMember(memberUserId, memberName) {
-    if (userRole !== 'admin') return
+    if (userRole !== 'admin' || !userBand?.id) return
     if (!window.confirm(`Remove ${memberName} from this band?`)) return
 
     const { error } = await supabase
@@ -882,7 +970,7 @@ export default function App() {
       alert('Failed to remove member: ' + error.message)
       return
     }
-    loadData()
+    await loadData(userBand.id)
   }
 
   const cashBalance = treasury.filter(t => t.type === 'cash').reduce((sum, t) => sum + Number(t.amount), 0)
@@ -924,13 +1012,13 @@ export default function App() {
 
           <div style={{ marginBottom: '16px' }}>
             <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>New Password</label>
-            <input 
-              type="password" 
-              value={newPasswordInput} 
-              onChange={e => setNewPasswordInput(e.target.value)} 
-              required 
-              style={inputStyle} 
-              placeholder="••••••••" 
+            <input
+              type="password"
+              value={newPasswordInput}
+              onChange={e => setNewPasswordInput(e.target.value)}
+              required
+              style={inputStyle}
+              placeholder="••••••••"
             />
           </div>
 
@@ -955,7 +1043,7 @@ export default function App() {
           <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0' }}>
             {isForgotPassword ? 'Reset Password' : isSignUp ? 'Create Account' : 'Sign In'}
           </h2>
-          
+
           {authError && (
             <div style={{ background: '#450A0A', border: '1px solid #EF4444', color: '#F87171', padding: '8px', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
               {authError}
@@ -977,9 +1065,9 @@ export default function App() {
             <div style={{ marginBottom: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                 <label style={{ fontSize: '12px', color: '#A1A1AA' }}>Password</label>
-                <button 
-                  type="button" 
-                  onClick={() => { setIsForgotPassword(true); setAuthError(null); setAuthSuccessMsg(null); }} 
+                <button
+                  type="button"
+                  onClick={() => { setIsForgotPassword(true); setAuthError(null); setAuthSuccessMsg(null); }}
                   style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '11px', cursor: 'pointer', padding: 0 }}
                 >
                   Forgot Password?
@@ -994,17 +1082,17 @@ export default function App() {
           </button>
 
           {isForgotPassword ? (
-            <button 
-              type="button" 
-              onClick={() => { setIsForgotPassword(false); setAuthError(null); setAuthSuccessMsg(null); }} 
+            <button
+              type="button"
+              onClick={() => { setIsForgotPassword(false); setAuthError(null); setAuthSuccessMsg(null); }}
               style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '12px', width: '100%', cursor: 'pointer' }}
             >
               ← Back to Sign In
             </button>
           ) : (
-            <button 
-              type="button" 
-              onClick={() => { setIsSignUp(!isSignUp); setAuthError(null); setAuthSuccessMsg(null); }} 
+            <button
+              type="button"
+              onClick={() => { setIsSignUp(!isSignUp); setAuthError(null); setAuthSuccessMsg(null); }}
               style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '12px', width: '100%', cursor: 'pointer' }}
             >
               {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
@@ -1034,33 +1122,33 @@ export default function App() {
             <p style={{ fontSize: '12px', color: '#A1A1AA', marginBottom: '8px', fontWeight: 'bold' }}>Your Existing Bands:</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
               {userBands.map(m => (
-                <div 
-                  key={m.band_id} 
+                <div
+                  key={m.band_id}
                   style={{ background: '#18181B', border: '1px solid #27272A', borderRadius: '8px', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff' }}
                 >
-                  <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setUserBand(m.bands); setUserRole(m.role); }}>
+                  <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => handleSelectBand(m.bands, m.role)}>
                     <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: '0 0 2px 0' }}>{m.bands.name}</h3>
                     <p style={{ fontSize: '11px', color: '#3B82F6', margin: 0 }}>Name: {m.member_name} • Role: {m.role} • Code: {m.bands.invite_code}</p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <button 
-                      onClick={() => handleEmailInvite(m.bands.name, m.bands.invite_code)} 
-                      title="Email Invite Code" 
+                    <button
+                      onClick={() => handleEmailInvite(m.bands.name, m.bands.invite_code)}
+                      title="Email Invite Code"
                       style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
                     >
                       <Mail size={14} /> Email
                     </button>
                     {m.role === 'admin' && (
-                      <button 
-                        onClick={() => handleDeleteBand(m.band_id, m.bands.name)} 
-                        title="Delete Band" 
+                      <button
+                        onClick={() => handleDeleteBand(m.band_id, m.bands.name)}
+                        title="Delete Band"
                         style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }}
                       >
                         <Trash2 size={14} />
                       </button>
                     )}
-                    <button 
-                      onClick={() => { setUserBand(m.bands); setUserRole(m.role); }}
+                    <button
+                      onClick={() => handleSelectBand(m.bands, m.role)}
                       style={{ fontSize: '12px', background: '#2563EB', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
                     >
                       Select →
@@ -1119,10 +1207,10 @@ export default function App() {
   // 3. MAIN APP DASHBOARD
   return (
     <div style={{ maxWidth: '480px', margin: '0 auto', background: '#0F0F10', color: '#E4E4E7', minHeight: '100vh', paddingBottom: '140px', fontFamily: 'sans-serif', boxSizing: 'border-box' }}>
-      
+
       <header style={{ padding: '16px', background: '#18181B', borderBottom: '1px solid #27272A', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <button 
+          <button
             onClick={() => setShowBandSwitcher(true)}
             style={{ background: 'none', border: 'none', color: '#fff', textAlign: 'left', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' }}
           >
@@ -1131,8 +1219,8 @@ export default function App() {
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
             <p style={{ fontSize: '11px', color: '#A1A1AA', margin: 0 }}>Role: <span style={{ color: '#22C55E', textTransform: 'capitalize' }}>{userRole}</span> • Code: <strong style={{ color: '#3B82F6' }}>{userBand.invite_code}</strong></p>
-            <button 
-              onClick={() => handleEmailInvite(userBand.name, userBand.invite_code)} 
+            <button
+              onClick={() => handleEmailInvite(userBand.name, userBand.invite_code)}
               style={{ background: 'none', border: 'none', color: '#3B82F6', fontSize: '11px', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: '2px', fontWeight: 'bold' }}
             >
               <Mail size={12} /> Email
@@ -1140,7 +1228,7 @@ export default function App() {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button onClick={loadData} title="Sync with Cloud" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 'bold' }}>
+          <button onClick={() => loadData(userBand.id)} title="Sync with Cloud" style={{ background: '#27272A', border: 'none', color: '#3B82F6', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 'bold' }}>
             <RefreshCw size={14} /> {syncing ? 'Syncing...' : 'Sync'}
           </button>
           <button onClick={() => supabase.auth.signOut()} title="Sign Out" style={{ background: '#27272A', border: 'none', color: '#EF4444', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' }}>
@@ -1157,7 +1245,7 @@ export default function App() {
               <X size={20} />
             </button>
             <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 14px 0', color: '#fff' }}>Switch Active Band</h3>
-            
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px', maxHeight: '200px', overflowY: 'auto' }}>
               {userBands.map(m => (
                 <div
@@ -1173,7 +1261,7 @@ export default function App() {
                     color: '#fff'
                   }}
                 >
-                  <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setUserBand(m.bands); setUserRole(m.role); setShowBandSwitcher(false); }}>
+                  <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => handleSelectBand(m.bands, m.role)}>
                     <p style={{ fontWeight: 'bold', margin: '0 0 2px 0', fontSize: '13px', color: '#fff' }}>{m.bands.name}</p>
                     <p style={{ fontSize: '10px', color: '#A1A1AA', margin: 0 }}>{m.member_name} ({m.role})</p>
                   </div>
@@ -1189,7 +1277,7 @@ export default function App() {
                     {m.band_id === userBand.id ? (
                       <span style={{ fontSize: '11px', color: '#60A5FA', fontWeight: 'bold', marginLeft: '4px' }}>Active</span>
                     ) : (
-                      <button onClick={() => { setUserBand(m.bands); setUserRole(m.role); setShowBandSwitcher(false); }} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}>
+                      <button onClick={() => handleSelectBand(m.bands, m.role)} style={{ background: '#2563EB', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}>
                         Select
                       </button>
                     )}
@@ -1198,9 +1286,10 @@ export default function App() {
               ))}
             </div>
 
-            <button 
+            <button
               onClick={() => {
                 setShowBandSwitcher(false)
+                clearBandDataState()
                 setUserBand(null)
               }}
               style={{ width: '100%', background: '#27272A', color: '#3B82F6', border: '1px solid #3B82F6', padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
@@ -1231,7 +1320,7 @@ export default function App() {
             {showReconcileModal && userRole !== 'merch' && (
               <div style={{ background: '#18181B', border: '2px solid #22C55E', borderRadius: '8px', padding: '14px', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '0 0 10px 0', color: '#22C55E' }}>Nightly Reconciliation Summary</h3>
-                
+
                 <div style={{ fontSize: '13px', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px', background: '#0F0F10', padding: '10px', borderRadius: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: '#A1A1AA' }}>Total Transactions:</span>
@@ -1251,13 +1340,13 @@ export default function App() {
 
                 <div style={{ marginBottom: '12px' }}>
                   <label style={{ fontSize: '12px', color: '#A1A1AA', display: 'block', marginBottom: '4px' }}>Door / Show Guarantee Payout ($):</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    placeholder="e.g. 350.00" 
-                    value={doorIncomeInput} 
-                    onChange={e => setDoorIncomeInput(e.target.value)} 
-                    style={inputStyle} 
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="e.g. 350.00"
+                    value={doorIncomeInput}
+                    onChange={e => setDoorIncomeInput(e.target.value)}
+                    style={inputStyle}
                   />
                 </div>
 
@@ -1283,7 +1372,6 @@ export default function App() {
                 return <p style={{ fontSize: '12px', color: '#71717A' }}>No merch items available in inventory.</p>
               }
 
-              // Group items by merch_type (fallback to 'Other' if not set)
               const typeGroups = {}
               merch.forEach(item => {
                 const t = item.merch_type || 'Other'
@@ -1293,8 +1381,7 @@ export default function App() {
 
               const categoryOrder = ['Shirts', 'Hoodies', 'Hats', 'CD', 'Patches', 'Stickers', 'Other']
               const activeCategories = categoryOrder.filter(cat => typeGroups[cat] && typeGroups[cat].length > 0)
-              
-              // Include any custom categories not in default order list
+
               Object.keys(typeGroups).forEach(cat => {
                 if (!activeCategories.includes(cat)) activeCategories.push(cat)
               })
@@ -1314,7 +1401,7 @@ export default function App() {
                       const isFlashing = flashCardId === item.id
 
                       return (
-                        <div 
+                        <div
                           key={item.id}
                           style={{
                             background: isSoldOut ? '#121214' : '#18181B',
@@ -1340,8 +1427,8 @@ export default function App() {
 
                           <div>
                             {item.has_sizes && (
-                              <select 
-                                value={selectedSizes[item.id] || 'L'} 
+                              <select
+                                value={selectedSizes[item.id] || 'L'}
                                 onChange={(e) => setSelectedSizes({...selectedSizes, [item.id]: e.target.value})}
                                 style={{ width: '100%', padding: '4px', background: '#0F0F10', border: '1px solid #27272A', borderRadius: '4px', color: '#fff', fontSize: '11px', marginBottom: '8px' }}
                               >
@@ -1354,7 +1441,7 @@ export default function App() {
                               <span style={{ fontSize: '10px', color: '#71717A' }}>Stock: {item.stock_count}</span>
                             </div>
 
-                            <button 
+                            <button
                               disabled={isSoldOut}
                               onClick={() => handleAddToCart(item)}
                               style={{ width: '100%', background: isSoldOut ? '#27272A' : '#2563EB', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', cursor: isSoldOut ? 'not-allowed' : 'pointer' }}
@@ -1405,9 +1492,9 @@ export default function App() {
             {showAddMerch && userRole !== 'merch' && (
               <form onSubmit={handleSaveMerchItem} style={{ background: '#18181B', padding: '12px', borderRadius: '8px', border: '1px solid #27272A', marginBottom: '14px' }}>
                 <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 8px 0', color: '#3B82F6' }}>{editingMerchId ? 'Edit Merch Item' : 'Add New Merch Item'}</h3>
-                
+
                 <input type="text" placeholder="Item Name (e.g. Tour Hoodie)" value={newName} onChange={e => setNewName(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
-                
+
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <div style={{ flex: 1 }}>
                     <label style={{ fontSize: '11px', color: '#A1A1AA', display: 'block', marginBottom: '2px' }}>Merch Type</label>
@@ -1444,11 +1531,11 @@ export default function App() {
                       {['S', 'M', 'L', 'XL', 'XXL', '3XL'].map(sz => (
                         <div key={sz}>
                           <label style={{ fontSize: '10px', color: '#71717A', display: 'block' }}>{sz}</label>
-                          <input 
-                            type="number" 
-                            value={sizeStockMatrix[sz]} 
+                          <input
+                            type="number"
+                            value={sizeStockMatrix[sz]}
                             onChange={(e) => setSizeStockMatrix({...sizeStockMatrix, [sz]: parseInt(e.target.value) || 0})}
-                            style={{ ...inputStyle, padding: '4px', textAlign: 'center', fontSize: '12px' }} 
+                            style={{ ...inputStyle, padding: '4px', textAlign: 'center', fontSize: '12px' }}
                           />
                         </div>
                       ))}
@@ -1464,7 +1551,7 @@ export default function App() {
 
             {merch.map(item => {
               const stock = item.stock_count
-              
+
               let lowSizesList = []
               if (item.has_sizes && item.size_matrix) {
                 lowSizesList = Object.entries(item.size_matrix)
@@ -1491,7 +1578,7 @@ export default function App() {
                       </h3>
                     </div>
                     <p style={{ fontSize: '12px', color: stockColor, fontWeight: '600', margin: '2px 0 0 0' }}>
-                      ${item.price} • Total Stock: {stock} 
+                      ${item.price} • Total Stock: {stock}
                       {stock < 5 ? ' ⚠️ (CRITICAL LOW)' : stock <= 10 ? ' ⚠️ (LOW STOCK)' : ''}
                     </p>
                     {hasSizeLowStock && (
@@ -1552,7 +1639,7 @@ export default function App() {
                     <option value="Practice">Practice</option>
                     <option value="Blackout">Blackout</option>
                   </select>
-                  
+
                   {eventType === 'Blackout' ? (
                     <div style={{ display: 'flex', gap: '4px', flex: 2 }}>
                       <input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} required style={{ ...inputStyle, flex: 1 }} />
@@ -1565,7 +1652,6 @@ export default function App() {
 
                 <input type="text" placeholder={eventType === 'Blackout' ? 'Reason (e.g. Vacation / Work Conflict)' : eventType === 'Practice' ? 'Practice Title / Focus' : 'Title / Venue Name'} value={eventTitle} onChange={e => setEventTitle(e.target.value)} required style={{ ...inputStyle, marginBottom: '8px' }} />
 
-                {/* Only Show Venue/Location/Guarantee for Shows */}
                 {eventType === 'Show' && (
                   <>
                     <input type="text" placeholder="Location / City" value={eventLocation} onChange={e => setEventLocation(e.target.value)} style={{ ...inputStyle, marginBottom: '8px' }} />
@@ -1573,7 +1659,6 @@ export default function App() {
                   </>
                 )}
 
-                {/* Conflict Alert Warning Box */}
                 {(() => {
                   const conflicts = getEventConflicts(eventDate, eventType === 'Blackout' ? eventEndDate : eventDate, editingEventId)
                   if (conflicts.blackoutConflict) {
@@ -1602,21 +1687,21 @@ export default function App() {
             {calendarEvents.map(ev => {
               const totalMembers = bandMembersList.length
               const isBandConfirmed = totalMembers > 0 && ev.votes.length >= totalMembers
-              
+
               const conflicts = getEventConflicts(ev.date, ev.end_date, ev.id)
               const hasBlackoutConflict = conflicts.blackoutConflict
               const hasShowPracticeConflict = conflicts.showPracticeConflict
 
-              const borderStyle = hasBlackoutConflict 
-                ? '2px solid #EF4444' 
-                : hasShowPracticeConflict 
-                ? '2px solid #EAB308' 
+              const borderStyle = hasBlackoutConflict
+                ? '2px solid #EF4444'
+                : hasShowPracticeConflict
+                ? '2px solid #EAB308'
                 : '1px solid #27272A'
 
-              const cardBg = hasBlackoutConflict 
-                ? '#2A0808' 
-                : hasShowPracticeConflict 
-                ? '#261A05' 
+              const cardBg = hasBlackoutConflict
+                ? '#2A0808'
+                : hasShowPracticeConflict
+                ? '#261A05'
                 : '#18181B'
 
               return (
@@ -1640,7 +1725,7 @@ export default function App() {
                       </div>
 
                       <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 2px 0' }}>{ev.title}</h3>
-                      
+
                       <p style={{ fontSize: '12px', color: '#A1A1AA', margin: 0 }}>
                         {ev.location && `${ev.location} • `}
                         {ev.end_date && ev.end_date !== ev.date ? `${ev.date} to ${ev.end_date}` : ev.date}
@@ -1653,16 +1738,16 @@ export default function App() {
                       )}
                       {userRole !== 'merch' && (
                         <>
-                          <button onClick={() => { 
-                            setEditingEventId(ev.id); 
-                            setEventType(ev.type); 
-                            setEventTitle(ev.title); 
-                            setEventLocation(ev.location || ''); 
-                            setEventDate(ev.date); 
-                            setEventEndDate(ev.end_date || ''); 
-                            setEventGuarantee(ev.guarantee || ''); 
-                            setEventNotes(ev.notes || ''); 
-                            setShowAddEvent(true); 
+                          <button onClick={() => {
+                            setEditingEventId(ev.id);
+                            setEventType(ev.type);
+                            setEventTitle(ev.title);
+                            setEventLocation(ev.location || '');
+                            setEventDate(ev.date);
+                            setEventEndDate(ev.end_date || '');
+                            setEventGuarantee(ev.guarantee || '');
+                            setEventNotes(ev.notes || '');
+                            setShowAddEvent(true);
                           }} style={{ background: 'none', border: 'none', color: '#3B82F6', cursor: 'pointer', padding: 0 }} title="Edit Event">
                             <Edit2 size={16} />
                           </button>
@@ -1909,11 +1994,11 @@ export default function App() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   {editingMemberUserId === member.user_id ? (
                     <div style={{ display: 'flex', gap: '6px', flex: 1, marginRight: '8px' }}>
-                      <input 
-                        type="text" 
-                        value={editMemberNameVal} 
-                        onChange={e => setEditMemberNameVal(e.target.value)} 
-                        style={{ ...inputStyle, padding: '4px 8px', fontSize: '13px' }} 
+                      <input
+                        type="text"
+                        value={editMemberNameVal}
+                        onChange={e => setEditMemberNameVal(e.target.value)}
+                        style={{ ...inputStyle, padding: '4px 8px', fontSize: '13px' }}
                       />
                       <button onClick={() => handleSaveMemberNameAdmin(member.user_id)} style={{ background: '#16A34A', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }} title="Save Name">
                         <Check size={14} />
@@ -1935,8 +2020,8 @@ export default function App() {
                   )}
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <select 
-                      value={member.role} 
+                    <select
+                      value={member.role}
                       onChange={(e) => handleUpdateMemberRole(member.user_id, e.target.value)}
                       style={{ background: '#0F0F10', color: '#fff', border: '1px solid #27272A', borderRadius: '4px', padding: '4px 6px', fontSize: '11px' }}
                     >
@@ -1994,7 +2079,7 @@ export default function App() {
         <button onClick={() => setActiveTab('sales')} style={{ background: 'none', border: 'none', color: activeTab === 'sales' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><ShoppingCart size={18} /><span style={{ marginTop: '2px' }}>Sales</span></button>
         <button onClick={() => setActiveTab('inventory')} style={{ background: 'none', border: 'none', color: activeTab === 'inventory' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Package size={18} /><span style={{ marginTop: '2px' }}>Inventory</span></button>
         <button onClick={() => setActiveTab('calendar')} style={{ background: 'none', border: 'none', color: activeTab === 'calendar' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><CalendarIcon size={18} /><span style={{ marginTop: '2px' }}>Data</span></button>
-        
+
         {userRole !== 'merch' && (
           <>
             <button onClick={() => setActiveTab('setlists')} style={{ background: 'none', border: 'none', color: activeTab === 'setlists' ? '#3B82F6' : '#71717A', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}><Music size={18} /><span style={{ marginTop: '2px' }}>Setlists</span></button>
@@ -2010,3 +2095,7 @@ export default function App() {
     </div>
   )
 }
+```[cite: 3]
+
+### Quick Reminder on Joining Bands with RLS Active
+If you tighten `SELECT` on `public.bands` in Supabase so non-members can't read all bands, `handleJoinBand`'s direct `.from('bands').select('*').eq('invite_code', ...)` lookup won't see a band you haven't joined yet unless you expose a `SECURITY DEFINER` RPC function (such as `lookup_band_by_invite_code(code text)`). Let me know if you want that SQL helper or if everything isolates cleanly after pushing this `App.jsx`.
