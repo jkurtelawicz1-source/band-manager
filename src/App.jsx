@@ -2095,7 +2095,3 @@ export default function App() {
     </div>
   )
 }
-```[cite: 3]
-
-### Quick Reminder on Joining Bands with RLS Active
-If you tighten `SELECT` on `public.bands` in Supabase so non-members can't read all bands, `handleJoinBand`'s direct `.from('bands').select('*').eq('invite_code', ...)` lookup won't see a band you haven't joined yet unless you expose a `SECURITY DEFINER` RPC function (such as `lookup_band_by_invite_code(code text)`). Let me know if you want that SQL helper or if everything isolates cleanly after pushing this `App.jsx`.
